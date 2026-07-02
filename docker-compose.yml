@@ -9,6 +9,8 @@ x-app-env: &app-env
   REDIS_URL: redis://redis:6379
   ARTIFACTS_ENDPOINT: http://minio:9000
   ARTIFACTS_BUCKET: autoforge
+  ARTIFACTS_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+  ARTIFACTS_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
   CURSOR_API_KEY: ${CURSOR_API_KEY:-}
   STITCH_API_KEY: ${STITCH_API_KEY:-}
   SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
@@ -20,6 +22,16 @@ x-app-env: &app-env
   GITHUB_ORG: ${GITHUB_ORG:-}
   GITHUB_AUTO_MERGE: ${GITHUB_AUTO_MERGE:-true}
   PUBLIC_URL: ${PUBLIC_URL:-http://localhost}
+  API_KEY: ${API_KEY:-}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+  MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-52428800}
+
+x-worker-limits: &worker-limits
+  deploy:
+    resources:
+      limits:
+        cpus: "1.0"
+        memory: 512M
 
 services:
   # Nginx — 프론트엔드 정적 파일 + API 리버스 프록시
@@ -30,9 +42,23 @@ services:
     image: autoforge-nginx:latest
     ports:
       - "80:80"
+      # HTTPS 사용 시 인증서를 nginx/certs 에 마운트하고 아래 포트를 열어주세요.
+      # 자세한 내용은 docs/PODMAN.md 참고.
+      # - "443:443"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
 
   # Rust API 백엔드
   api:
@@ -50,7 +76,20 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
 
   orchestrator:
     image: autoforge-api:latest
@@ -61,7 +100,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     restart: unless-stopped
+    <<: *worker-limits
 
   worker:
     image: autoforge-api:latest
@@ -71,7 +113,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     restart: unless-stopped
+    <<: *worker-limits
 
   redis:
     image: docker.io/library/redis:7-alpine
@@ -82,18 +127,35 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
 
   minio:
     image: docker.io/minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    # 운영 환경에서는 9000/9001 포트를 외부에 공개하지 말고 내부망(nginx/api)에서만
+    # 접근하도록 이 매핑을 제거하세요.
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
       - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
 
 volumes:
   redis-data:

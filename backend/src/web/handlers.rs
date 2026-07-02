@@ -1,5 +1,7 @@
 use crate::app::App;
-use crate::domain::{DailyLogSummary, DevopsPlanInput, PipelineState, ProjectDetailView, ProjectView, StageState};
+use crate::domain::{
+    DailyLogSummary, DevopsPlanInput, PipelineState, ProjectDetailView, ProjectView, StageState,
+};
 use crate::error::{AutoForgeError, Result};
 use crate::services::github::ensure_project_repo;
 use crate::services::pipeline::{run_inline, start_project_mq};
@@ -18,6 +20,38 @@ pub async fn health(app: web::Data<Arc<App>>) -> HttpResponse {
         "slack": app.slack.is_some(),
         "github": app.github.is_some(),
         "github_auto_merge": app.config.github_auto_merge,
+        "auth_enabled": app.config.auth_enabled(),
+    }))
+}
+
+/// 의존성(스토어/아티팩트/큐) 연결 상태를 점검하는 readiness probe.
+/// 하나라도 비정상이면 503을 반환한다.
+pub async fn ready(app: web::Data<Arc<App>>) -> HttpResponse {
+    let store_ok = app.store.list().await.is_ok();
+    let artifacts_durable = app.artifacts.is_durable();
+
+    let queue_ok = if let Some(mq) = &app.queue {
+        mq.ping().await.is_ok()
+    } else {
+        true
+    };
+
+    let checks = serde_json::json!({
+        "store": store_ok,
+        "artifacts_durable": artifacts_durable,
+        "queue": queue_ok,
+    });
+
+    let ready = store_ok && queue_ok;
+    let mut status = if ready {
+        HttpResponse::Ok()
+    } else {
+        HttpResponse::ServiceUnavailable()
+    };
+
+    status.json(serde_json::json!({
+        "status": if ready { "ready" } else { "not_ready" },
+        "checks": checks,
     }))
 }
 
@@ -44,6 +78,8 @@ pub async fn create_project(
     let mut repo_url: Option<String> = None;
     let mut pdf_bytes: Option<Vec<u8>> = None;
     let mut devops_plan = DevopsPlanInput::default();
+    let max_upload = app.config.max_upload_bytes;
+    let mut total_bytes: usize = 0;
 
     while let Some(field) = payload
         .try_next()
@@ -64,12 +100,40 @@ pub async fn create_project(
         let mut field = field;
         while let Some(chunk) = field.next().await {
             let chunk = chunk.map_err(|e| AutoForgeError::BadRequest(e.to_string()))?;
+            total_bytes += chunk.len();
+            if total_bytes > max_upload {
+                return Err(AutoForgeError::BadRequest(format!(
+                    "upload too large (limit: {max_upload} bytes)"
+                )));
+            }
             data.extend_from_slice(&chunk);
         }
 
         match field_name.as_str() {
-            "name" => name = Some(String::from_utf8_lossy(&data).to_string()),
-            "repo_url" => repo_url = Some(String::from_utf8_lossy(&data).to_string()),
+            "name" => {
+                let value = String::from_utf8_lossy(&data).trim().to_string();
+                if value.len() > 200 {
+                    return Err(AutoForgeError::BadRequest(
+                        "name too long (max 200 chars)".into(),
+                    ));
+                }
+                if !value.is_empty() {
+                    name = Some(value);
+                }
+            }
+            "repo_url" => {
+                let value = String::from_utf8_lossy(&data).trim().to_string();
+                if !value.is_empty() {
+                    if !(value.starts_with("https://github.com/")
+                        || value.starts_with("git@github.com:"))
+                    {
+                        return Err(AutoForgeError::BadRequest(
+                            "repo_url must be a github.com HTTPS or SSH URL".into(),
+                        ));
+                    }
+                    repo_url = Some(value);
+                }
+            }
             "devops_plan_text" | "devops_text" => {
                 devops_plan.text = Some(String::from_utf8_lossy(&data).to_string());
             }
@@ -83,8 +147,12 @@ pub async fn create_project(
         }
     }
 
-    let pdf =
-        pdf_bytes.ok_or_else(|| AutoForgeError::BadRequest("PDF file required (field: plan)".into()))?;
+    let pdf = pdf_bytes
+        .ok_or_else(|| AutoForgeError::BadRequest("PDF file required (field: plan)".into()))?;
+
+    if pdf.is_empty() {
+        return Err(AutoForgeError::BadRequest("empty PDF file".into()));
+    }
 
     if !pdf.starts_with(b"%PDF") {
         return Err(AutoForgeError::BadRequest("invalid PDF file".into()));
