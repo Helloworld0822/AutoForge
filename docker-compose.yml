@@ -19,6 +19,7 @@ x-app-env: &app-env
   GITHUB_TOKEN: ${GITHUB_TOKEN:-}
   GITHUB_ORG: ${GITHUB_ORG:-}
   GITHUB_AUTO_MERGE: ${GITHUB_AUTO_MERGE:-true}
+  PUBLIC_URL: ${PUBLIC_URL:-http://localhost}
 
 services:
   # Nginx — 프론트엔드 정적 파일 + API 리버스 프록시

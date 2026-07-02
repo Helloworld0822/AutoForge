@@ -84,7 +84,8 @@ export GITHUB_AUTO_MERGE=true   # 기본값
 | GET | `/v1/projects` | 프로젝트 목록 |
 | GET | `/v1/projects/{id}` | 프로젝트 상세 |
 | GET | `/v1/projects/{id}/stream` | SSE 진행률 |
-| POST | `/v1/projects/{id}/cancel` | 취소 |
+| GET | `/v1/projects/{id}/daily-logs` | 일별 경과 목록 |
+| GET | `/v1/projects/{id}/daily-logs/{date}` | 특정 날짜 MD 로그 |
 
 Compose 환경에서는 nginx가 `/v1`, `/health`를 `api:8080`으로 프록시합니다.
 

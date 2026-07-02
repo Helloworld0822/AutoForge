@@ -1,6 +1,7 @@
 import { Link, useParams } from 'react-router-dom';
 import { useProject } from '../hooks/useProject';
 import { PipelineStages } from '../components/PipelineStages';
+import { DailyLogPanel } from '../components/DailyLogPanel';
 import { cancelProject } from '../api/client';
 import {
   ArrowLeft,
@@ -111,6 +112,8 @@ export function ProjectDetailPage() {
         <h3>파이프라인 스테이지</h3>
         <PipelineStages stages={project.stages} />
       </section>
+
+      <DailyLogPanel projectId={project.id} />
 
       <section className="card links-card">
         <h3>GitHub & 산출물</h3>

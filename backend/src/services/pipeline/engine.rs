@@ -5,6 +5,8 @@ use crate::domain::{
 use crate::error::{AutoForgeError, Result};
 use crate::services::worker::{executors, StageContext, StageOutput};
 use crate::services::github::try_auto_merge_pr;
+use crate::services::daily_log::DailyEvent;
+use crate::services::daily_log_notify::record_daily_event;
 use bytes::Bytes;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -239,6 +241,17 @@ pub async fn run_inline(app: std::sync::Arc<App>, project_id: Uuid) -> Result<()
         }
     }
 
+    let _ = record_daily_event(
+        &app,
+        &mut project,
+        DailyEvent {
+            event: "project_created",
+            stage: None,
+            message: "프로젝트 생성 및 파이프라인 시작".into(),
+        },
+    )
+    .await;
+
     loop {
         let commands = project.scheduler.ready_stages();
         if commands.is_empty() {
@@ -276,6 +289,17 @@ pub async fn run_inline(app: std::sync::Arc<App>, project_id: Uuid) -> Result<()
                     .await;
             }
 
+            let _ = record_daily_event(
+                &app,
+                &mut project,
+                DailyEvent {
+                    event: "stage_running",
+                    stage: Some(stage),
+                    message: format!("{} 스테이지 실행 시작", stage.as_str()),
+                },
+            )
+            .await;
+
             match execute_stage(&app, &project, stage).await {
                 Ok(output) => {
                     let outcome = apply_stage_output_async(&app, &mut project, stage, output).await?;
@@ -297,6 +321,22 @@ pub async fn run_inline(app: std::sync::Arc<App>, project_id: Uuid) -> Result<()
                             .await;
                     }
 
+                    let event_name = if project.stages.get(&stage) == Some(&StageState::Failed) {
+                        "stage_failed"
+                    } else {
+                        "stage_completed"
+                    };
+                    let _ = record_daily_event(
+                        &app,
+                        &mut project,
+                        DailyEvent {
+                            event: event_name,
+                            stage: Some(stage),
+                            message: format!("{} 스테이지 {}", stage.as_str(), event_name),
+                        },
+                    )
+                    .await;
+
                     match outcome {
                         PipelineOutcome::Completed => {
                             if let Some(slack) = &app.slack {
@@ -307,6 +347,16 @@ pub async fn run_inline(app: std::sync::Arc<App>, project_id: Uuid) -> Result<()
                                     )
                                     .await;
                             }
+                            let _ = record_daily_event(
+                                &app,
+                                &mut project,
+                                DailyEvent {
+                                    event: "pipeline_completed",
+                                    stage: None,
+                                    message: "파이프라인 완료".into(),
+                                },
+                            )
+                            .await;
                             return Ok(());
                         }
                         PipelineOutcome::Failed(msg) => {
@@ -319,6 +369,16 @@ pub async fn run_inline(app: std::sync::Arc<App>, project_id: Uuid) -> Result<()
                                     )
                                     .await;
                             }
+                            let _ = record_daily_event(
+                                &app,
+                                &mut project,
+                                DailyEvent {
+                                    event: "pipeline_failed",
+                                    stage: Some(stage),
+                                    message: msg.clone(),
+                                },
+                            )
+                            .await;
                             return Err(AutoForgeError::StageFailed { stage, message: msg });
                         }
                         PipelineOutcome::Continue => {}

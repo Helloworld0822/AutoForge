@@ -1,5 +1,7 @@
 import type {
   CreateProjectResponse,
+  DailyLog,
+  DailyLogSummary,
   HealthResponse,
   Project,
   ProjectDetail,
@@ -61,6 +63,19 @@ export async function createProject(
   }
 
   return res.json() as Promise<CreateProjectResponse>;
+}
+
+export async function getDailyLog(
+  projectId: string,
+  date: string,
+): Promise<DailyLog> {
+  return request<DailyLog>(`/v1/projects/${projectId}/daily-logs/${date}`);
+}
+
+export async function listDailyLogs(
+  projectId: string,
+): Promise<DailyLogSummary[]> {
+  return request<DailyLogSummary[]>(`/v1/projects/${projectId}/daily-logs`);
 }
 
 export async function cancelProject(id: string): Promise<void> {

@@ -36,6 +36,25 @@ export interface ProjectDetail extends Project {
   stage_outputs: Record<string, unknown>;
 }
 
+export interface DailyLogSummary {
+  date: string;
+  day_number: number;
+  entry_count: number;
+  progress_percent: number;
+  updated_at: string;
+}
+
+export interface DailyLog extends DailyLogSummary {
+  entries: {
+    at: string;
+    event: string;
+    stage?: string;
+    message: string;
+    progress_percent: number;
+  }[];
+  markdown: string;
+}
+
 export interface CreateProjectResponse {
   id: string;
   state: PipelineState;

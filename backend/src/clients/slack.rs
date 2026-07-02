@@ -11,7 +11,7 @@ pub struct SlackNotifier {
     webhook_url: Option<String>,
     bot_token: Option<String>,
     channel: Option<String>,
-    pub base_url: String,
+    public_url: String,
 }
 
 impl SlackNotifier {
@@ -25,12 +25,42 @@ impl SlackNotifier {
             webhook_url: config.slack_webhook_url.clone(),
             bot_token: config.slack_bot_token.clone(),
             channel: config.slack_channel.clone(),
-            base_url: format!("http://{}:{}", config.host, config.port),
+            public_url: config.public_url.clone(),
         })
     }
 
     pub fn is_enabled(&self) -> bool {
         self.webhook_url.is_some() || (self.bot_token.is_some() && self.channel.is_some())
+    }
+
+    pub async fn notify_daily_digest(
+        &self,
+        project: &Project,
+        log: &crate::domain::DailyLog,
+        thread_ts: Option<&str>,
+    ) -> Result<()> {
+        let web_link = format!(
+            "{}/projects/{}#daily-{}",
+            self.public_url, project.id.0, log.date
+        );
+        let preview = if log.markdown.len() > 1200 {
+            format!("{}…", &log.markdown[..1200])
+        } else {
+            log.markdown.clone()
+        };
+        let text = format!(
+            "📅 *Day {} 일일 경과* — `{}` ({})\n\
+             진행률: *{}%* | 이벤트: {}건\n\
+             <{web_link}|웹에서 전체 보기>\n\n\
+             ```markdown\n{preview}\n```",
+            log.day_number,
+            project.display_name(),
+            log.date,
+            project.progress_percent(),
+            log.entries.len(),
+        );
+        self.post_message(&text, thread_ts).await?;
+        Ok(())
     }
 
     pub async fn notify_project_created(&self, project: &Project) -> Result<Option<String>> {

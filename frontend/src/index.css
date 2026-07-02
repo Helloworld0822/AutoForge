@@ -479,6 +479,80 @@ input {
   gap: 0.25rem;
 }
 
+.daily-log-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 1rem;
+  min-height: 280px;
+}
+
+.daily-log-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.daily-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  transition: border-color 0.15s;
+}
+
+.daily-tab:hover,
+.daily-tab.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.daily-tab-day {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.daily-tab-date {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.daily-tab-meta {
+  font-size: 0.7rem;
+  color: var(--accent);
+}
+
+.daily-log-content {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  overflow: auto;
+  max-height: 480px;
+}
+
+.markdown-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--text);
+  margin: 0;
+}
+
+@media (max-width: 768px) {
+  .daily-log-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 .upload-form input[type='text'],
 .upload-form input[type='url'] {
   display: block;

@@ -107,6 +107,8 @@ impl App {
             stage_outputs: HashMap::new(),
             accumulated_artifacts: Vec::new(),
             slack_message_ts: None,
+            created_at: chrono::Utc::now(),
+            daily_logs: HashMap::new(),
         };
         let _ = self.store.save(&project).await;
         project

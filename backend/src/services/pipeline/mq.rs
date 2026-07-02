@@ -1,6 +1,8 @@
 use crate::app::App;
 use crate::domain::{PipelineState, StageState};
 use crate::error::{AutoForgeError, Result};
+use crate::services::daily_log::DailyEvent;
+use crate::services::daily_log_notify::record_daily_event;
 use crate::services::github::ensure_project_repo;
 use crate::services::pipeline::engine::{
     apply_stage_output_async, execute_stage, prepare_project_pdf, PipelineOutcome,
@@ -29,6 +31,17 @@ pub async fn start_project_mq(app: Arc<App>, project_id: Uuid) -> Result<()> {
             app.store.save(&project).await?;
         }
     }
+
+    let _ = record_daily_event(
+        &app,
+        &mut project,
+        DailyEvent {
+            event: "project_created",
+            stage: None,
+            message: "프로젝트 생성 및 파이프라인 시작".into(),
+        },
+    )
+    .await;
 
     let mq = app
         .queue
@@ -100,6 +113,17 @@ pub async fn run_worker(
                     )
                     .await;
             }
+
+            let _ = record_daily_event(
+                &app,
+                &mut project,
+                DailyEvent {
+                    event: "stage_running",
+                    stage: Some(stage),
+                    message: format!("{} 스테이지 실행 시작", stage.as_str()),
+                },
+            )
+            .await;
 
             match execute_stage(&app, &project, stage).await {
                 Ok(output) => {
@@ -201,6 +225,22 @@ async fn handle_event(app: &App, event: &PipelineEvent) -> Result<()> {
                     .await;
             }
 
+            let event_name = if project.stages.get(stage) == Some(&StageState::Failed) {
+                "stage_failed"
+            } else {
+                "stage_completed"
+            };
+            let _ = record_daily_event(
+                app,
+                &mut project,
+                DailyEvent {
+                    event: event_name,
+                    stage: Some(*stage),
+                    message: format!("{} 스테이지 {}", stage.as_str(), event_name),
+                },
+            )
+            .await;
+
             match outcome {
                 PipelineOutcome::Completed => {
                     mq.publish_event(&PipelineEvent::PipelineCompleted {
@@ -215,6 +255,16 @@ async fn handle_event(app: &App, event: &PipelineEvent) -> Result<()> {
                             )
                             .await;
                     }
+                    let _ = record_daily_event(
+                        app,
+                        &mut project,
+                        DailyEvent {
+                            event: "pipeline_completed",
+                            stage: None,
+                            message: "파이프라인 완료".into(),
+                        },
+                    )
+                    .await;
                 }
                 PipelineOutcome::Failed(msg) => {
                     mq.publish_event(&PipelineEvent::PipelineFailed {
@@ -231,6 +281,16 @@ async fn handle_event(app: &App, event: &PipelineEvent) -> Result<()> {
                             )
                             .await;
                     }
+                    let _ = record_daily_event(
+                        app,
+                        &mut project,
+                        DailyEvent {
+                            event: "pipeline_failed",
+                            stage: Some(*stage),
+                            message: msg.clone(),
+                        },
+                    )
+                    .await;
                 }
                 PipelineOutcome::Continue => {
                     let cmds = project.scheduler.ready_stages();
@@ -261,6 +321,16 @@ async fn handle_event(app: &App, event: &PipelineEvent) -> Result<()> {
                     )
                     .await;
             }
+            let _ = record_daily_event(
+                app,
+                &mut project,
+                DailyEvent {
+                    event: "pipeline_failed",
+                    stage: Some(*stage),
+                    message: error.clone(),
+                },
+            )
+            .await;
         }
         PipelineEvent::PipelineCompleted { .. } | PipelineEvent::PipelineFailed { .. } => {}
     }

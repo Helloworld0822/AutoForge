@@ -16,6 +16,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route(
                     "/projects/{id}/cancel",
                     web::post().to(handlers::cancel_project),
+                )
+                .route(
+                    "/projects/{id}/daily-logs",
+                    web::get().to(handlers::list_daily_logs),
+                )
+                .route(
+                    "/projects/{id}/daily-logs/{date}",
+                    web::get().to(handlers::get_daily_log),
                 ),
         );
 }

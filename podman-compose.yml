@@ -18,6 +18,7 @@ x-app-env: &app-env
   GITHUB_TOKEN: ${GITHUB_TOKEN:-}
   GITHUB_ORG: ${GITHUB_ORG:-}
   GITHUB_AUTO_MERGE: ${GITHUB_AUTO_MERGE:-true}
+  PUBLIC_URL: ${PUBLIC_URL:-http://localhost}
 
 services:
   nginx:

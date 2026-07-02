@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::domain::{DevopsPlanInput, PipelineState, ProjectDetailView, ProjectView, StageState};
+use crate::domain::{DailyLogSummary, DevopsPlanInput, PipelineState, ProjectDetailView, ProjectView, StageState};
 use crate::error::{AutoForgeError, Result};
 use crate::services::github::ensure_project_repo;
 use crate::services::pipeline::{run_inline, start_project_mq};
@@ -199,4 +199,43 @@ pub async fn cancel_project(
         "id": id,
         "state": "cancelled",
     })))
+}
+
+pub async fn list_daily_logs(
+    app: web::Data<Arc<App>>,
+    path: web::Path<Uuid>,
+) -> Result<HttpResponse> {
+    let id = path.into_inner();
+    let project = app
+        .get_project(id)
+        .await
+        .ok_or_else(|| AutoForgeError::NotFound(format!("project {id}")))?;
+
+    let mut logs: Vec<DailyLogSummary> = project
+        .daily_logs
+        .values()
+        .map(DailyLogSummary::from)
+        .collect();
+    logs.sort_by(|a, b| a.date.cmp(&b.date));
+
+    Ok(HttpResponse::Ok().json(logs))
+}
+
+pub async fn get_daily_log(
+    app: web::Data<Arc<App>>,
+    path: web::Path<(Uuid, String)>,
+) -> Result<HttpResponse> {
+    let (id, date) = path.into_inner();
+    let project = app
+        .get_project(id)
+        .await
+        .ok_or_else(|| AutoForgeError::NotFound(format!("project {id}")))?;
+
+    let log = project
+        .daily_logs
+        .get(&date)
+        .cloned()
+        .ok_or_else(|| AutoForgeError::NotFound(format!("daily log {date}")))?;
+
+    Ok(HttpResponse::Ok().json(log))
 }

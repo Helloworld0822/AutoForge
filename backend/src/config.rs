@@ -26,6 +26,8 @@ pub struct Config {
     pub github_org: Option<String>,
     /// SecurityPatch 통과 후 PR 자동 머지
     pub github_auto_merge: bool,
+    /// 웹 대시보드 공개 URL (Slack 링크용)
+    pub public_url: String,
 }
 
 impl Config {
@@ -68,6 +70,8 @@ impl Config {
             github_auto_merge: env::var("GITHUB_AUTO_MERGE")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(true),
+            public_url: env::var("PUBLIC_URL")
+                .unwrap_or_else(|_| "http://localhost".into()),
         }
     }
 

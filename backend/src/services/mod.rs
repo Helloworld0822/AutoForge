@@ -1,4 +1,6 @@
 pub mod artifacts;
+pub mod daily_log;
+pub mod daily_log_notify;
 pub mod github;
 pub mod ingest;
 pub mod orchestrator;
