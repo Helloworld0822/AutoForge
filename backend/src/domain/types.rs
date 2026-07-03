@@ -139,12 +139,24 @@ impl ProjectId {
     }
 }
 
+impl Default for ProjectId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunId(pub Uuid);
 
 impl RunId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+}
+
+impl Default for RunId {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -160,7 +172,11 @@ pub enum StageState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactRef {
+    /// 짧은 표시 이름 (매칭/식별용, 예: "plan.pdf", "devops_plan.md")
     pub name: String,
+    /// 아티팩트 스토어 내 실제 조회 키 (예: "projects/{id}/plan.pdf")
+    #[serde(default)]
+    pub key: String,
     pub uri: String,
     pub content_type: String,
     pub sha256: Option<String>,

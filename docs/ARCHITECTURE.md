@@ -36,7 +36,7 @@ flowchart TB
     subgraph Storage["영속 계층"]
         PG[(PostgreSQL)]
         RD[(Redis Streams)]
-        S3[(S3 / MinIO)]
+        S3[(로컬 아티팩트 스토리지 / ARTIFACTS_DIR)]
     end
 
     subgraph External["외부 AI 서비스"]
@@ -171,11 +171,13 @@ pub enum PipelineState {
 - 2차 fallback: 스캔 PDF → 외부 OCR 워커 (Tesseract sidecar, optional)
 - SHA-256 해시로 중복 PDF 스킵
 
-### 4.5 `services/artifacts` — 산출물 저장
+### 4.5 `services/artifacts` — 산출물 저장 + 이미지 호스팅
 
-- S3 호환 API (`aws-sdk-s3` 또는 MinIO)
-- Content-addressable: `sha256/{hash}` 경로
-- 스테이지 간 전달은 **S3 URI 참조만** (메모리에 대용량 복사 금지)
+- 로컬 디스크 기반 (`ARTIFACTS_DIR`), Compose/Podman 환경에서는 api/worker/orchestrator가
+  공유 볼륨(`artifacts-data`)을 마운트해 파일을 공유한다
+- 이미지 호스팅 기능(`/v1/images`, `/media/{filename}`)도 동일한 저장소를 사용한다
+- 스테이지 간 전달은 **아티팩트 키/URI 참조만** (메모리에 대용량 복사 금지)
+- 여러 호스트로 확장 시에는 NFS 등 네트워크 파일시스템 또는 별도 오브젝트 스토리지 어댑터로 교체 가능
 
 ### 4.6 `services/orchestrator` — 상태 머신 + 스케줄러
 

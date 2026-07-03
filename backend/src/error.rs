@@ -19,10 +19,7 @@ pub enum AutoForgeError {
     Orchestrator(String),
 
     #[error("stage {stage:?} failed: {message}")]
-    StageFailed {
-        stage: StageId,
-        message: String,
-    },
+    StageFailed { stage: StageId, message: String },
 
     #[error("invalid state transition: {from:?} -> {to:?}")]
     InvalidTransition {

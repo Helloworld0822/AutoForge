@@ -1,8 +1,6 @@
 use chrono::Utc;
 
-use crate::domain::{
-    DailyLog, DailyLogEntry, PipelineState, Project, StageId, StageState,
-};
+use crate::domain::{DailyLog, DailyLogEntry, PipelineState, Project, StageId, StageState};
 
 #[derive(Debug, Clone)]
 pub struct DailyEvent {
@@ -97,7 +95,11 @@ pub fn render_markdown(project: &Project, log: &DailyLog) -> String {
             project.repo_url.as_deref().unwrap_or("-")
         ));
     }
-    if project.devops_plan.as_ref().is_some_and(|d| d.has_content()) {
+    if project
+        .devops_plan
+        .as_ref()
+        .is_some_and(|d| d.has_content())
+    {
         md.push_str("**DevOps 계획서:** 포함  \n");
     }
     md.push('\n');
@@ -136,7 +138,9 @@ pub fn render_markdown(project: &Project, log: &DailyLog) -> String {
     md.push_str("\n## 요약\n\n");
     match project.state {
         PipelineState::Completed => md.push_str("파이프라인이 성공적으로 완료되었습니다.\n"),
-        PipelineState::Failed => md.push_str("파이프라인이 실패했습니다. Debug/Verify 로그를 확인하세요.\n"),
+        PipelineState::Failed => {
+            md.push_str("파이프라인이 실패했습니다. Debug/Verify 로그를 확인하세요.\n")
+        }
         PipelineState::Running => md.push_str("파이프라인이 실행 중입니다.\n"),
         PipelineState::Cancelled => md.push_str("프로젝트가 취소되었습니다.\n"),
         PipelineState::Pending => md.push_str("프로젝트가 대기 중입니다.\n"),

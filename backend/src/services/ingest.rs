@@ -119,7 +119,10 @@ pub fn ingest_devops_plan(input: &crate::domain::DevopsPlanInput) -> Result<Devo
 
 fn detect_text_format(text: &str) -> &'static str {
     let trimmed = text.trim_start();
-    if trimmed.starts_with("---") || trimmed.contains("\nkind:") || trimmed.contains("\napiVersion:") {
+    if trimmed.starts_with("---")
+        || trimmed.contains("\nkind:")
+        || trimmed.contains("\napiVersion:")
+    {
         "yaml"
     } else if trimmed.starts_with('#') || trimmed.contains("\n## ") {
         "markdown"
@@ -132,12 +135,14 @@ pub fn to_artifacts(result: &IngestResult, base_uri: &str) -> Vec<ArtifactRef> {
     vec![
         ArtifactRef {
             name: "raw_text.md".into(),
+            key: format!("{base_uri}/raw_text.md"),
             uri: format!("{base_uri}/raw_text.md"),
             content_type: "text/markdown".into(),
             sha256: Some(result.sha256.clone()),
         },
         ArtifactRef {
             name: "ingest_meta.json".into(),
+            key: format!("{base_uri}/ingest_meta.json"),
             uri: format!("{base_uri}/ingest_meta.json"),
             content_type: "application/json".into(),
             sha256: None,

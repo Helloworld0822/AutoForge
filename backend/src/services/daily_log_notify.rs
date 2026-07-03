@@ -16,7 +16,11 @@ pub async fn record_daily_event(
     let key = format!("projects/{project_id}/daily/{date}.md");
 
     app.artifacts
-        .put(key.as_str(), Bytes::from(log.markdown.clone()), "text/markdown")
+        .put(
+            key.as_str(),
+            Bytes::from(log.markdown.clone()),
+            "text/markdown",
+        )
         .await?;
 
     app.store.save(project).await?;

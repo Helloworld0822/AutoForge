@@ -158,9 +158,7 @@ impl GitHubClient {
 
     /// repo URL에서 owner/repo 파싱
     pub fn parse_repo_url(repo_url: &str) -> Option<(String, String)> {
-        let url = repo_url
-            .trim_end_matches('/')
-            .trim_end_matches(".git");
+        let url = repo_url.trim_end_matches('/').trim_end_matches(".git");
         let parts: Vec<&str> = url.split('/').collect();
         if parts.len() < 2 {
             return None;
@@ -252,11 +250,7 @@ impl GitHubClient {
     }
 
     /// PR URL 또는 repo에서 PR을 찾아 자동 머지
-    pub async fn auto_merge_pr(
-        &self,
-        repo_url: &str,
-        pr_url: Option<&str>,
-    ) -> Result<MergeResult> {
+    pub async fn auto_merge_pr(&self, repo_url: &str, pr_url: Option<&str>) -> Result<MergeResult> {
         if !self.auto_merge {
             return Ok(MergeResult {
                 merged: false,
@@ -275,9 +269,7 @@ impl GitHubClient {
             .ok_or_else(|| AutoForgeError::BadRequest("invalid repo_url".into()))?;
 
         if let Some(pr) = self.find_open_pr(&owner, &repo).await? {
-            return self
-                .merge_pull_request(&owner, &repo, pr.number)
-                .await;
+            return self.merge_pull_request(&owner, &repo, pr.number).await;
         }
 
         Ok(MergeResult {

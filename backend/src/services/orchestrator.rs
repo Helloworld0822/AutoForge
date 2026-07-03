@@ -99,7 +99,9 @@ impl DagScheduler {
         if passed {
             self.quality.record_verify_passed();
             self.completed.insert(StageId::Verify);
-        } else if self.quality.verify_exhausted() || self.quality.debug_cycles >= self.quality.max_debug_cycles {
+        } else if self.quality.verify_exhausted()
+            || self.quality.debug_cycles >= self.quality.max_debug_cycles
+        {
             self.failed = Some(StageId::Verify);
         } else {
             self.quality.record_verify_failed();
@@ -214,6 +216,12 @@ impl Default for DagScheduler {
 
 pub struct ProjectTracker {
     stages: HashMap<StageId, StageState>,
+}
+
+impl Default for ProjectTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ProjectTracker {

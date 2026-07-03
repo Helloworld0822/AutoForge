@@ -10,7 +10,9 @@ RUN cargo build --release
 FROM docker.io/library/debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    wget \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin autoforge
 
 WORKDIR /app
 COPY --from=builder /build/target/release/autoforge /usr/local/bin/autoforge
@@ -18,7 +20,12 @@ COPY --from=builder /build/target/release/autoforge /usr/local/bin/autoforge
 ENV HOST=0.0.0.0
 ENV PORT=8080
 ENV RUST_LOG=info
+ENV ARTIFACTS_DIR=/data/artifacts
 
+RUN mkdir -p /data/artifacts && chown -R autoforge:autoforge /data
+
+USER autoforge
+VOLUME ["/data/artifacts"]
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/autoforge"]
 CMD ["serve"]

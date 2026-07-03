@@ -51,7 +51,7 @@ impl StageExecutor for IngestExecutor {
             .or_else(|| ctx.input.iter().find(|a| a.name == "plan.pdf"))
             .ok_or_else(|| AutoForgeError::Ingest("missing PDF input".into()))?;
 
-        let bytes = ctx.artifacts.get(&pdf_ref.name).await?;
+        let bytes = ctx.artifacts.get(&pdf_ref.key).await?;
         let result = ingest_pdf(&bytes)?;
         let base = format!("projects/{}/ingest", ctx.command.project_id.0);
 
@@ -73,13 +73,10 @@ impl StageExecutor for IngestExecutor {
         let mut artifacts = vec![text_uri.clone()];
 
         // DevOps 계획서 ingest (선택)
-        let devops_ref = ctx
-            .input
-            .iter()
-            .find(|a| a.name.starts_with("devops_plan"));
+        let devops_ref = ctx.input.iter().find(|a| a.name.starts_with("devops_plan"));
 
         if let Some(devops_ref) = devops_ref {
-            let devops_bytes = ctx.artifacts.get(&devops_ref.name).await?;
+            let devops_bytes = ctx.artifacts.get(&devops_ref.key).await?;
             let devops_input = crate::domain::DevopsPlanInput {
                 filename: Some(devops_ref.name.clone()),
                 content_type: Some(devops_ref.content_type.clone()),
@@ -231,6 +228,7 @@ impl StageExecutor for DesignExecutor {
 
         let artifact = ArtifactRef {
             name: format!("screens/{}.html", screen.id),
+            key: html.download_url.clone(),
             uri: html.download_url,
             content_type: "text/html".into(),
             sha256: None,
@@ -417,10 +415,9 @@ impl StageExecutor for SecurityPatchExecutor {
     }
 
     async fn execute(&self, ctx: &StageContext) -> Result<StageOutput> {
-        let repo_url = ctx
-            .repo_url
-            .as_deref()
-            .ok_or_else(|| AutoForgeError::BadRequest("repo_url required for security patch".into()))?;
+        let repo_url = ctx.repo_url.as_deref().ok_or_else(|| {
+            AutoForgeError::BadRequest("repo_url required for security patch".into())
+        })?;
 
         let prompt = build_security_prompt(ctx);
         let profile = ModelProfile::security_patch();

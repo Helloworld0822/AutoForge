@@ -67,6 +67,19 @@ export interface CreateProjectResponse {
   has_devops_plan: boolean;
 }
 
+export interface HostedImage {
+  filename: string;
+  url: string;
+  size: number;
+  uploaded_at: string;
+}
+
+export interface UploadImageResponse {
+  filename: string;
+  url: string;
+  content_type: string;
+}
+
 export interface HealthResponse {
   status: string;
   service: string;

@@ -69,14 +69,53 @@ fn skipped(message: impl Into<String>) -> CheckResult {
     }
 }
 
-/// 외부 의존성(Redis, Cursor, Stitch) 프로브 — readiness 용
+/// 외부 의존성(Redis, Cursor, Stitch) 및 스토어 프로브 — readiness 용
 pub async fn readiness(app: &App) -> HealthReport {
     let mut checks = BTreeMap::new();
     let mut unhealthy = false;
 
+    let store_ok = app.store.list().await.is_ok();
+    checks.insert(
+        "store".to_string(),
+        CheckResult {
+            status: if store_ok { "ok" } else { "error" },
+            message: if store_ok {
+                None
+            } else {
+                Some("project store unavailable".into())
+            },
+            latency_ms: None,
+        },
+    );
+    if !store_ok {
+        unhealthy = true;
+    }
+
+    let artifacts_durable = app.artifacts.is_durable();
+    checks.insert(
+        "artifacts_durable".to_string(),
+        CheckResult {
+            status: if artifacts_durable { "ok" } else { "skipped" },
+            message: if artifacts_durable {
+                None
+            } else {
+                Some("in-memory artifact store (dev only)".into())
+            },
+            latency_ms: None,
+        },
+    );
+
     if let Some(mq) = &app.queue {
         let mq = mq.clone();
-        let (k, v) = timed_check("redis", || async move { mq.ping().await }).await;
+        let (k, v) = timed_check("redis", || {
+            let mq = mq.clone();
+            async move {
+                mq.ping()
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+        })
+        .await;
         if v.status == "error" {
             unhealthy = true;
         }

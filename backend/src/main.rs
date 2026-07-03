@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
             let app = if config.message_queue_enabled() {
                 App::connect(config).await?.shared()
             } else {
-                App::new(config)?.shared()
+                App::new(config).await?.shared()
             };
             autoforge::web::serve(app).await?;
         }

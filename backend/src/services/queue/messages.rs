@@ -1,4 +1,4 @@
-use crate::domain::{StageCommand, StageId};
+use crate::domain::{ArtifactRef, StageCommand, StageId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -46,6 +46,8 @@ pub enum PipelineEvent {
         project_id: Uuid,
         stage: StageId,
         metadata: serde_json::Value,
+        #[serde(default)]
+        artifacts: Vec<ArtifactRef>,
         passed: Option<bool>,
     },
     StageFailed {

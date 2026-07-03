@@ -16,7 +16,7 @@ const DEVOPS_ACCEPT =
 const DEVOPS_PLACEHOLDER = `# DevOps 계획서 예시
 
 ## 인프라
-- Docker Compose (nginx + api + redis + minio)
+- Docker Compose (nginx + api + redis)
 - Podman 호환
 
 ## CI/CD
@@ -77,25 +77,33 @@ export function NewProjectPage() {
     }
   };
 
+  const dropzoneClass = (active: boolean, hasFile: boolean) =>
+    `mb-5 cursor-pointer rounded-lg border-2 border-dashed p-10 text-center transition-colors ${
+      active || hasFile
+        ? 'border-accent bg-accent-dim'
+        : 'border-border hover:border-accent hover:bg-accent-dim'
+    } ${hasFile ? 'border-solid' : ''}`;
+
   return (
-    <div className="page">
-      <header className="page-header">
-        <div>
-          <h2>새 프로젝트</h2>
-          <p>
-            PDF 외주 계획서와 함께 DevOps 계획서(CI/CD, 인프라, 배포)를
-            작성하거나 업로드할 수 있습니다.
-          </p>
-        </div>
+    <div className="mx-auto max-w-[1100px]">
+      <header className="mb-6">
+        <h2 className="mt-1 text-[1.75rem] font-semibold">새 프로젝트</h2>
+        <p className="mt-1.5 max-w-xl text-muted">
+          PDF 외주 계획서와 함께 DevOps 계획서(CI/CD, 인프라, 배포)를
+          작성하거나 업로드할 수 있습니다.
+        </p>
       </header>
 
-      <form className="card upload-form" onSubmit={onSubmit}>
-        <h3 className="section-title">
+      <form
+        className="mb-5 rounded-lg border border-border bg-card p-5 md:p-6"
+        onSubmit={onSubmit}
+      >
+        <h3 className="mb-3 mt-1 flex items-center gap-2 text-[0.95rem] font-medium">
           <FileText size={18} />
           외주 계획서 (PDF) — 필수
         </h3>
         <div
-          className={`dropzone ${dragOver ? 'drag-over' : ''} ${file ? 'has-file' : ''}`}
+          className={dropzoneClass(dragOver, !!file)}
           onDragOver={(e) => {
             e.preventDefault();
             setDragOver(true);
@@ -113,40 +121,41 @@ export function NewProjectPage() {
           />
           {file ? (
             <>
-              <FileText size={40} className="accent" />
-              <strong>{file.name}</strong>
-              <span className="muted">{(file.size / 1024).toFixed(1)} KB</span>
+              <FileText size={40} className="text-accent" />
+              <strong className="mt-3 block">{file.name}</strong>
+              <span className="text-muted">{(file.size / 1024).toFixed(1)} KB</span>
             </>
           ) : (
             <>
-              <Upload size={40} className="muted" />
-              <strong>PDF 계획서를 드래그하거나 클릭하여 선택</strong>
-              <span className="muted">필수 · 최대 50MB</span>
+              <Upload size={40} className="text-muted" />
+              <strong className="mt-3 block">PDF 계획서를 드래그하거나 클릭하여 선택</strong>
+              <span className="text-muted">필수 · 최대 50MB</span>
             </>
           )}
         </div>
 
-        <h3 className="section-title">
+        <h3 className="mb-3 mt-1 flex items-center gap-2 text-[0.95rem] font-medium">
           <Server size={18} />
           DevOps 계획서 — 선택
         </h3>
-        <p className="section-desc">
+        <p className="mb-4 text-sm text-muted">
           CI/CD, Docker/K8s, 인프라, 모니터링, 배포 전략을 직접 작성하거나
           파일(.md, .yaml, .yml, .txt, .pdf)로 업로드하세요.
         </p>
 
-        <label>
+        <label className="mb-4 block text-sm text-muted">
           직접 작성
           <textarea
             rows={10}
             placeholder={DEVOPS_PLACEHOLDER}
             value={devopsText}
             onChange={(e) => setDevopsText(e.target.value)}
+            className="mt-1.5 block min-h-40 w-full resize-y rounded-lg border border-border bg-bg px-3.5 py-3 font-mono text-sm leading-relaxed text-foreground"
           />
         </label>
 
         <div
-          className={`dropzone compact ${devopsFile ? 'has-file' : ''}`}
+          className={`${dropzoneClass(false, !!devopsFile)} mb-4 p-5`}
           onClick={() => devopsFileRef.current?.click()}
         >
           <input
@@ -158,11 +167,11 @@ export function NewProjectPage() {
           />
           {devopsFile ? (
             <>
-              <CloudCog size={28} className="accent" />
-              <strong>{devopsFile.name}</strong>
+              <CloudCog size={28} className="text-accent" />
+              <strong className="mt-2 block">{devopsFile.name}</strong>
               <button
                 type="button"
-                className="btn ghost small"
+                className="mt-2 inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-transparent px-2.5 py-1.5 text-xs font-medium text-foreground transition-opacity hover:opacity-90"
                 onClick={(e) => {
                   e.stopPropagation();
                   setDevopsFile(null);
@@ -173,32 +182,33 @@ export function NewProjectPage() {
             </>
           ) : (
             <>
-              <CloudCog size={28} className="muted" />
-              <strong>DevOps 계획서 파일 업로드 (선택)</strong>
-              <span className="muted">.md · .yaml · .yml · .txt · .pdf</span>
+              <CloudCog size={28} className="text-muted" />
+              <strong className="mt-2 block">DevOps 계획서 파일 업로드 (선택)</strong>
+              <span className="text-muted">.md · .yaml · .yml · .txt · .pdf</span>
             </>
           )}
         </div>
 
         {hasDevops && (
-          <div className="alert info">
+          <div className="mb-4 rounded-lg border border-accent/30 bg-accent/10 px-4 py-3 text-sm text-accent">
             DevOps 계획서가 파이프라인에 반영됩니다 — CI/CD, Dockerfile,
             compose, 인프라 설정이 자동 생성됩니다.
           </div>
         )}
 
-        <label>
+        <label className="mb-4 block text-sm text-muted">
           프로젝트 이름
           <input
             type="text"
             placeholder="예: 쇼핑몰 MVP"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            className="mt-1.5 block w-full rounded-lg border border-border bg-bg px-3.5 py-2.5 text-foreground"
           />
         </label>
 
-        <label>
-          <span className="label-row">
+        <label className="mb-4 block text-sm text-muted">
+          <span className="inline-flex items-center gap-1.5">
             <FolderGit2 size={16} />
             GitHub Repo URL (선택)
           </span>
@@ -207,19 +217,28 @@ export function NewProjectPage() {
             placeholder="비워두면 프라이빗 레포 자동 생성"
             value={repoUrl}
             onChange={(e) => setRepoUrl(e.target.value)}
+            className="mt-1.5 block w-full rounded-lg border border-border bg-bg px-3.5 py-2.5 text-foreground"
           />
-          <small className="hint">
+          <small className="mt-1.5 block text-xs text-muted">
             GITHUB_TOKEN 환경 변수가 설정되어 있으면 자동으로 프라이빗 레포를
             만들고, 검증 통과 후 PR을 머지합니다.
           </small>
         </label>
 
-        {error && <div className="alert error">{error}</div>}
+        {error && (
+          <div className="mb-4 rounded-lg border border-error/30 bg-error/10 px-4 py-3 text-sm text-error">
+            {error}
+          </div>
+        )}
 
-        <button type="submit" className="btn primary full" disabled={loading}>
+        <button
+          type="submit"
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-3.5 font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={loading}
+        >
           {loading ? (
             <>
-              <Loader2 size={18} className="spin" />
+              <Loader2 size={18} className="animate-spin" />
               파이프라인 시작 중...
             </>
           ) : (
@@ -228,26 +247,26 @@ export function NewProjectPage() {
         </button>
       </form>
 
-      <section className="card info-card">
-        <h3>자동화 파이프라인</h3>
-        <ol className="pipeline-list">
+      <section className="mb-5 rounded-lg border border-border bg-card p-5 md:p-6">
+        <h3 className="mb-4 text-base font-medium">자동화 파이프라인</h3>
+        <ol className="list-decimal pl-5 text-sm text-muted [&>li]:mb-2">
           <li>
-            <strong>Summarize</strong> — Haiku가 PDF + DevOps 계획서 통합 요약
+            <strong className="text-foreground">Summarize</strong> — Haiku가 PDF + DevOps 계획서 통합 요약
           </li>
           <li>
-            <strong>Architect</strong> — Sonnet이 아키텍처 & 인프라/CI/CD 설계
+            <strong className="text-foreground">Architect</strong> — Sonnet이 아키텍처 & 인프라/CI/CD 설계
           </li>
           <li>
-            <strong>Design</strong> — Stitch로 UI 디자인
+            <strong className="text-foreground">Design</strong> — Stitch로 UI 디자인
           </li>
           <li>
-            <strong>Implement</strong> — Codex 5.3이 코드 + DevOps 산출물 구현
+            <strong className="text-foreground">Implement</strong> — Codex 5.3이 코드 + DevOps 산출물 구현
           </li>
           <li>
-            <strong>Verify → Debug</strong> — 품질 게이트 (최대 3회)
+            <strong className="text-foreground">Verify → Debug</strong> — 품질 게이트 (최대 3회)
           </li>
           <li>
-            <strong>Security → Deliver</strong> — 보안 패치 후 PR 자동 머지
+            <strong className="text-foreground">Security → Deliver</strong> — 보안 패치 후 PR 자동 머지
           </li>
         </ol>
       </section>

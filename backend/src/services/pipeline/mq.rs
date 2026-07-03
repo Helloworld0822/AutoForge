@@ -19,6 +19,9 @@ use uuid::Uuid;
 
 const REDIS_READ_RETRIES: u32 = 3;
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_EVENT_RETRIES: i64 = 5;
+const STALE_CLAIM_MIN_IDLE_MS: i64 = 30_000;
+const STALE_COMMAND_MIN_IDLE_MS: i64 = 300_000;
 
 /// MQ 모드: 프로젝트 생성 후 이벤트 발행
 pub async fn start_project_mq(app: Arc<App>, project_id: Uuid) -> Result<()> {
@@ -87,10 +90,7 @@ async fn read_commands_resilient(
             Err(e) => {
                 last_err = Some(e);
                 if attempt + 1 < REDIS_READ_RETRIES {
-                    warn!(
-                        attempt = attempt + 1,
-                        "redis command read failed, retrying"
-                    );
+                    warn!(attempt = attempt + 1, "redis command read failed, retrying");
                     tokio::time::sleep(Duration::from_millis(250 * (attempt + 1) as u64)).await;
                 }
             }
@@ -112,10 +112,7 @@ async fn read_events_resilient(
             Err(e) => {
                 last_err = Some(e);
                 if attempt + 1 < REDIS_READ_RETRIES {
-                    warn!(
-                        attempt = attempt + 1,
-                        "redis event read failed, retrying"
-                    );
+                    warn!(attempt = attempt + 1, "redis event read failed, retrying");
                     tokio::time::sleep(Duration::from_millis(250 * (attempt + 1) as u64)).await;
                 }
             }
@@ -160,30 +157,26 @@ pub async fn run_worker(
             }
         }
 
-        let shutting_down = *shutdown_rx.borrow();
-
-        if shutting_down {
+        if *shutdown_rx.borrow() {
             if in_flight.is_empty() {
                 break;
             }
-            if let Ok(()) =
-                tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, async {
-                    while let Some(joined) = in_flight.join_next().await {
-                        if let Err(e) = joined {
-                            error!(error = %e, "worker task join failed");
-                        }
+            if tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, async {
+                while let Some(joined) = in_flight.join_next().await {
+                    if let Err(e) = joined {
+                        error!(error = %e, "worker task join failed");
                     }
-                })
-                .await
+                }
+            })
+            .await
+            .is_err()
             {
-            } else {
                 warn!("shutdown drain timed out with tasks still running");
             }
             break;
         }
 
         let available = concurrency.saturating_sub(in_flight.len());
-
         if available == 0 {
             if let Some(joined) = in_flight.join_next().await {
                 if let Err(e) = joined {
@@ -193,7 +186,14 @@ pub async fn run_worker(
             continue;
         }
 
-        let messages = read_commands_resilient(&mq, &consumer_name, available, 5000).await?;
+        let mut messages =
+            read_commands_resilient(&mq, &consumer_name, available, 5000).await?;
+        if let Ok(stale) = mq
+            .claim_stale_commands(&consumer_name, STALE_COMMAND_MIN_IDLE_MS, available)
+            .await
+        {
+            messages.extend(stale);
+        }
 
         for (msg_id, cmd) in messages {
             let stage = cmd.stage;
@@ -237,7 +237,13 @@ async fn process_stage_command(
     };
 
     if project.state == PipelineState::Cancelled {
-        info!(%project_id, ?stage, "project cancelled, skipping stage");
+        info!(%project_id, ?stage, "project cancelled, skipping command");
+        mq.ack_command(&msg_id).await?;
+        return Ok(());
+    }
+
+    if project.stages.get(&stage) == Some(&StageState::Completed) {
+        warn!(%project_id, ?stage, "stage already completed, skipping duplicate command (idempotency)");
         mq.ack_command(&msg_id).await?;
         return Ok(());
     }
@@ -247,11 +253,8 @@ async fn process_stage_command(
     project.scheduler.mark_running(stage);
     app.store.save(&project).await?;
 
-    mq.publish_event(&PipelineEvent::StageStarted {
-        project_id,
-        stage,
-    })
-    .await?;
+    mq.publish_event(&PipelineEvent::StageStarted { project_id, stage })
+        .await?;
 
     if let Some(slack) = &app.slack {
         let _ = slack
@@ -282,6 +285,7 @@ async fn process_stage_command(
                 project_id,
                 stage,
                 metadata: output.metadata.clone(),
+                artifacts: output.artifacts.clone(),
                 passed,
             })
             .await?;
@@ -319,24 +323,62 @@ pub async fn run_orchestrator(app: Arc<App>, consumer_name: String) -> Result<()
             break;
         }
 
-        let block_ms = 5000;
-        let messages =
-            read_events_resilient(&mq, &consumer_name, 10, block_ms).await?;
-
+        let messages = read_events_resilient(&mq, &consumer_name, 10, 5000).await?;
         for (msg_id, event) in messages {
-            if let Err(e) = handle_event(&app, &event).await {
-                error!(?event, error = %e, "orchestrator event handling failed");
-            }
-            mq.ack_event(&msg_id).await?;
+            handle_event_with_retry(&app, &mq, &msg_id, &event).await;
         }
 
-        if shutdown_rx.has_changed().unwrap_or(false) {
-            info!(%consumer_name, "orchestrator finishing after shutdown signal");
-            break;
+        match mq
+            .claim_stale_events(&consumer_name, STALE_CLAIM_MIN_IDLE_MS, 10)
+            .await
+        {
+            Ok(stale) => {
+                for (msg_id, event) in stale {
+                    handle_event_with_retry(&app, &mq, &msg_id, &event).await;
+                }
+            }
+            Err(e) => warn!(error = %e, "failed to claim stale events"),
         }
     }
 
     Ok(())
+}
+
+async fn handle_event_with_retry(
+    app: &App,
+    mq: &MessageQueue,
+    msg_id: &str,
+    event: &PipelineEvent,
+) {
+    match handle_event(app, event).await {
+        Ok(()) => {
+            if let Err(e) = mq.ack_event(msg_id).await {
+                error!(error = %e, msg_id, "failed to ack event after successful handling");
+            }
+        }
+        Err(e) => {
+            let attempt = mq.incr_retry(&mq.events_stream, msg_id).await.unwrap_or(1);
+            error!(?event, error = %e, attempt, "orchestrator event handling failed");
+
+            if attempt >= MAX_EVENT_RETRIES {
+                let payload = serde_json::to_string(event).unwrap_or_default();
+                if let Err(dlq_err) = mq
+                    .dead_letter(&mq.events_stream, msg_id, &payload, &e.to_string())
+                    .await
+                {
+                    error!(error = %dlq_err, "failed to move event to dead-letter stream");
+                } else {
+                    error!(
+                        ?event,
+                        attempt, "event moved to dead-letter stream after max retries"
+                    );
+                }
+                if let Err(ack_err) = mq.ack_event(msg_id).await {
+                    error!(error = %ack_err, "failed to ack dead-lettered event");
+                }
+            }
+        }
+    }
 }
 
 async fn handle_event(app: &App, event: &PipelineEvent) -> Result<()> {
@@ -361,6 +403,7 @@ async fn handle_event(app: &App, event: &PipelineEvent) -> Result<()> {
             project_id,
             stage,
             metadata,
+            artifacts,
             passed,
         } => {
             let mut project = app
@@ -369,16 +412,20 @@ async fn handle_event(app: &App, event: &PipelineEvent) -> Result<()> {
                 .await?
                 .ok_or_else(|| AutoForgeError::NotFound(format!("project {project_id}")))?;
 
+            if project.stages.get(stage) == Some(&StageState::Completed) {
+                info!(%project_id, ?stage, "stage already applied, ignoring duplicate event");
+                return Ok(());
+            }
+
             let output = crate::services::worker::StageOutput {
-                artifacts: vec![],
+                artifacts: artifacts.clone(),
                 metadata: metadata.clone(),
             };
-            let outcome = apply_stage_output_async(&app, &mut project, *stage, output).await?;
+            let outcome = apply_stage_output_async(app, &mut project, *stage, output).await?;
             app.store.save(&project).await?;
 
             if let Some(slack) = &app.slack {
-                let status = if *passed == Some(false) && *stage == crate::domain::StageId::Verify
-                {
+                let status = if *passed == Some(false) && *stage == crate::domain::StageId::Verify {
                     "failed (will debug)"
                 } else {
                     "completed"
@@ -417,10 +464,7 @@ async fn handle_event(app: &App, event: &PipelineEvent) -> Result<()> {
                     .await?;
                     if let Some(slack) = &app.slack {
                         let _ = slack
-                            .notify_pipeline_done(
-                                &project,
-                                project.slack_message_ts.as_deref(),
-                            )
+                            .notify_pipeline_done(&project, project.slack_message_ts.as_deref())
                             .await;
                     }
                     let _ = record_daily_event(
@@ -461,8 +505,12 @@ async fn handle_event(app: &App, event: &PipelineEvent) -> Result<()> {
                     .await;
                 }
                 PipelineOutcome::Continue => {
-                    let cmds = project.scheduler.ready_stages();
-                    mq.enqueue_commands(&cmds).await?;
+                    if project.state == PipelineState::Cancelled {
+                        info!(%project_id, "project cancelled, not enqueueing further stages");
+                    } else {
+                        let cmds = project.scheduler.ready_stages();
+                        mq.enqueue_commands(&cmds).await?;
+                    }
                 }
             }
         }
@@ -482,11 +530,7 @@ async fn handle_event(app: &App, event: &PipelineEvent) -> Result<()> {
             app.store.save(&project).await?;
             if let Some(slack) = &app.slack {
                 let _ = slack
-                    .notify_pipeline_failed(
-                        &project,
-                        error,
-                        project.slack_message_ts.as_deref(),
-                    )
+                    .notify_pipeline_failed(&project, error, project.slack_message_ts.as_deref())
                     .await;
             }
             let _ = record_daily_event(

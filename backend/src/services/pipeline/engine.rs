@@ -1,12 +1,10 @@
 use crate::app::App;
-use crate::domain::{
-    ArtifactRef, PipelineState, Project, StageCompleted, StageId, StageState,
-};
+use crate::domain::{ArtifactRef, PipelineState, Project, StageCompleted, StageId, StageState};
 use crate::error::{AutoForgeError, Result};
-use crate::services::worker::{executors, StageContext, StageOutput};
-use crate::services::github::try_auto_merge_pr;
 use crate::services::daily_log::DailyEvent;
 use crate::services::daily_log_notify::record_daily_event;
+use crate::services::github::try_auto_merge_pr;
+use crate::services::worker::{executors, StageContext, StageOutput};
 use bytes::Bytes;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -20,16 +18,15 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
     if accumulated.is_empty() {
         accumulated.push(ArtifactRef {
             name: "plan.pdf".into(),
+            key: pdf_key.clone(),
             uri: app.artifacts.uri_for(&pdf_key),
             content_type: "application/pdf".into(),
             sha256: None,
         });
     }
 
-    let executor_map: std::collections::HashMap<_, _> = executors()
-        .into_iter()
-        .map(|e| (e.stage(), e))
-        .collect();
+    let executor_map: std::collections::HashMap<_, _> =
+        executors().into_iter().map(|e| (e.stage(), e)).collect();
 
     let executor = executor_map
         .get(&stage)
@@ -88,9 +85,7 @@ pub fn apply_stage_output(
     project
         .accumulated_artifacts
         .extend(output.artifacts.clone());
-    project
-        .stage_outputs
-        .insert(stage, output.metadata.clone());
+    project.stage_outputs.insert(stage, output.metadata.clone());
 
     match stage {
         StageId::Verify => {
@@ -151,16 +146,23 @@ pub async fn prepare_project_inputs(app: &App, project: &mut Project) -> Result<
     if let Some(pdf) = &project.pdf_bytes {
         let pdf_key = format!("projects/{project_id}/plan.pdf");
         app.artifacts
-            .put(pdf_key.as_str(), Bytes::from(pdf.clone()), "application/pdf")
+            .put(
+                pdf_key.as_str(),
+                Bytes::from(pdf.clone()),
+                "application/pdf",
+            )
             .await?;
         if project.accumulated_artifacts.is_empty() {
             project.accumulated_artifacts.push(ArtifactRef {
                 name: "plan.pdf".into(),
+                key: pdf_key.clone(),
                 uri: app.artifacts.uri_for(&pdf_key),
                 content_type: "application/pdf".into(),
                 sha256: None,
             });
         }
+        // Redis 등 영속 저장소에 대용량 바이너리를 중복 저장하지 않도록 정리
+        project.pdf_bytes = None;
     }
 
     if let Some(devops) = &project.devops_plan {
@@ -185,14 +187,22 @@ pub async fn prepare_project_inputs(app: &App, project: &mut Project) -> Result<
                 return Ok(());
             };
 
-            app.artifacts.put(key.as_str(), bytes, &content_type).await?;
+            app.artifacts
+                .put(key.as_str(), bytes, &content_type)
+                .await?;
             project.accumulated_artifacts.push(ArtifactRef {
                 name: storage_name.clone(),
+                key: key.clone(),
                 uri: app.artifacts.uri_for(&key),
                 content_type,
                 sha256: None,
             });
         }
+    }
+
+    // DevOps 계획서 원본 바이트도 아티팩트 스토어에만 유지 (Project 저장 시 중복 방지)
+    if let Some(devops) = project.devops_plan.as_mut() {
+        devops.bytes = None;
     }
 
     Ok(())
@@ -269,11 +279,19 @@ pub async fn run_inline(app: std::sync::Arc<App>, project_id: Uuid) -> Result<()
             if project.scheduler.has_failed() {
                 project.state = PipelineState::Failed;
                 app.store.save(&project).await?;
-                return Err(AutoForgeError::Orchestrator(
-                    "quality gate failed".into(),
-                ));
+                return Err(AutoForgeError::Orchestrator("quality gate failed".into()));
             }
             break;
+        }
+
+        // 취소 확인: 별도 요청(API)이 상태를 Cancelled로 바꿨을 수 있으므로 재조회
+        if let Ok(Some(latest)) = app.store.get(project_id).await {
+            if latest.state == PipelineState::Cancelled {
+                project.state = PipelineState::Cancelled;
+                app.store.save(&project).await?;
+                info!(%project_id, "pipeline cancelled, stopping inline execution");
+                return Ok(());
+            }
         }
 
         for cmd in commands {
@@ -285,7 +303,12 @@ pub async fn run_inline(app: std::sync::Arc<App>, project_id: Uuid) -> Result<()
 
             if let Some(slack) = &app.slack {
                 let _ = slack
-                    .notify_stage_update(&project, stage, "running", project.slack_message_ts.as_deref())
+                    .notify_stage_update(
+                        &project,
+                        stage,
+                        "running",
+                        project.slack_message_ts.as_deref(),
+                    )
                     .await;
             }
 
@@ -302,7 +325,8 @@ pub async fn run_inline(app: std::sync::Arc<App>, project_id: Uuid) -> Result<()
 
             match execute_stage(&app, &project, stage).await {
                 Ok(output) => {
-                    let outcome = apply_stage_output_async(&app, &mut project, stage, output).await?;
+                    let outcome =
+                        apply_stage_output_async(&app, &mut project, stage, output).await?;
                     app.store.save(&project).await?;
 
                     if let Some(slack) = &app.slack {
@@ -379,7 +403,10 @@ pub async fn run_inline(app: std::sync::Arc<App>, project_id: Uuid) -> Result<()
                                 },
                             )
                             .await;
-                            return Err(AutoForgeError::StageFailed { stage, message: msg });
+                            return Err(AutoForgeError::StageFailed {
+                                stage,
+                                message: msg,
+                            });
                         }
                         PipelineOutcome::Continue => {}
                     }

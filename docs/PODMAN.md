@@ -10,7 +10,9 @@ AutoForge는 **`compose.yml` 하나**로 Docker Compose와 Podman Compose를 모
                           ├── /v1/* ──► api:8080
                           └── /health ──► api:8080
 
-  api / orchestrator / worker ──► Redis Streams MQ ──► MinIO
+  api / orchestrator / worker ──► Redis Streams MQ
+              │
+      공유 볼륨 artifacts-data (파이프라인 산출물 + 이미지 호스팅)
 ```
 
 | 서비스 | 역할 |
@@ -20,7 +22,23 @@ AutoForge는 **`compose.yml` 하나**로 Docker Compose와 Podman Compose를 모
 | **orchestrator** | 이벤트 소비 → 다음 스테이지 enqueue |
 | **worker** | 커맨드 소비 → 스테이지 실행 (수평 확장) |
 | **redis** | MQ + 프로젝트 상태 |
-| **minio** | 아티팩트 저장소 |
+
+아티팩트 저장소는 별도 서비스 없이 `artifacts-data` 공유 볼륨(로컬 디스크)을 사용합니다.
+api/orchestrator/worker 컨테이너가 모두 같은 볼륨을 `/data/artifacts`에 마운트하므로
+스테이지 산출물과 업로드 이미지가 프로세스 간에 공유됩니다.
+
+## 메시지 큐 최적화
+
+| 스트림 | 용도 | Consumer |
+|--------|------|----------|
+| `autoforge:commands` | 스테이지 실행 커맨드 | Worker (수평 확장) |
+| `autoforge:events` | 완료/실패 이벤트 | Orchestrator |
+
+**최적화 포인트:**
+- Worker 3+ replica로 병렬 스테이지 처리 (`architect` ∥ `design`)
+- `WORKER_CONCURRENCY`로 컨테이너당 동시 스테이지 실행 수 제어
+- Redis Consumer Group으로 at-least-once + 자동 재분배
+- API는 커맨드 enqueue만 — 블로킹 없음
 
 ## 빠른 시작
 

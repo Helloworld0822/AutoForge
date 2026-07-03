@@ -98,7 +98,11 @@ impl SlackNotifier {
         Ok(())
     }
 
-    pub async fn notify_pipeline_done(&self, project: &Project, thread_ts: Option<&str>) -> Result<()> {
+    pub async fn notify_pipeline_done(
+        &self,
+        project: &Project,
+        thread_ts: Option<&str>,
+    ) -> Result<()> {
         let text = format!(
             "🎉 *파이프라인 완료* — `{}`\n{}\n진행률: 100%",
             project.display_name(),
@@ -181,10 +185,7 @@ impl SlackNotifier {
                         .into(),
                 ));
             }
-            return Ok(result
-                .get("ts")
-                .and_then(|v| v.as_str())
-                .map(String::from));
+            return Ok(result.get("ts").and_then(|v| v.as_str()).map(String::from));
         }
 
         Ok(None)
@@ -195,7 +196,11 @@ fn stage_bar(project: &Project) -> String {
     StageId::all()
         .iter()
         .map(|&stage| {
-            let st = project.stages.get(&stage).copied().unwrap_or(StageState::Queued);
+            let st = project
+                .stages
+                .get(&stage)
+                .copied()
+                .unwrap_or(StageState::Queued);
             let icon = match st {
                 StageState::Completed | StageState::Skipped => "✅",
                 StageState::Running => "🔄",

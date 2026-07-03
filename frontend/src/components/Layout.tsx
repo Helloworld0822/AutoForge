@@ -3,6 +3,7 @@ import {
   Box,
   FolderGit2,
   GitPullRequest,
+  Image as ImageIcon,
   Layers,
   Sparkles,
   Upload,
@@ -24,36 +25,44 @@ export function Layout() {
   const nav = [
     { to: '/', label: '대시보드', icon: Layers },
     { to: '/new', label: '새 프로젝트', icon: Upload },
+    { to: '/images', label: '이미지 호스팅', icon: ImageIcon },
   ];
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-icon">
+    <div className="grid min-h-screen grid-cols-1 md:grid-cols-[260px_1fr]">
+      <aside className="flex flex-col gap-8 border-b border-border bg-bg-elevated p-6 md:border-b-0 md:border-r">
+        <div className="flex items-center gap-3">
+          <div className="grid size-10 place-items-center rounded-[10px] bg-accent-dim text-accent">
             <Sparkles size={20} />
           </div>
           <div>
-            <h1>AutoForge</h1>
-            <p>AI 외주 자동화</p>
+            <h1 className="text-[1.1rem] font-bold">AutoForge</h1>
+            <p className="text-xs text-muted">AI 외주 자동화</p>
           </div>
         </div>
 
-        <nav className="nav">
-          {nav.map(({ to, label, icon: Icon }) => (
-            <Link
-              key={to}
-              to={to}
-              className={location.pathname === to ? 'nav-link active' : 'nav-link'}
-            >
-              <Icon size={18} />
-              {label}
-            </Link>
-          ))}
+        <nav className="flex flex-col gap-1.5">
+          {nav.map(({ to, label, icon: Icon }) => {
+            const active = location.pathname === to;
+            return (
+              <Link
+                key={to}
+                to={to}
+                className={`flex items-center gap-2.5 rounded-lg px-3.5 py-2.5 text-muted transition-colors ${
+                  active
+                    ? 'bg-accent-dim text-foreground'
+                    : 'hover:bg-accent-dim hover:text-foreground'
+                }`}
+              >
+                <Icon size={18} />
+                {label}
+              </Link>
+            );
+          })}
         </nav>
 
-        <div className="sidebar-footer">
-          <div className="status-grid">
+        <div className="mt-auto">
+          <div className="grid gap-2">
             <StatusPill
               icon={<Activity size={14} />}
               label="API"
@@ -78,7 +87,7 @@ export function Layout() {
         </div>
       </aside>
 
-      <main className="main">
+      <main className="overflow-y-auto p-8">
         <Outlet />
       </main>
     </div>
@@ -95,10 +104,14 @@ function StatusPill({
   ok: boolean;
 }) {
   return (
-    <div className={`status-pill ${ok ? 'ok' : 'off'}`}>
+    <div
+      className={`flex items-center gap-1.5 rounded-md bg-card px-2 py-1.5 text-xs ${
+        ok ? 'text-success' : 'text-muted'
+      }`}
+    >
       {icon}
       <span>{label}</span>
-      <Box size={8} className="dot" />
+      <Box size={8} className="ml-auto fill-current" />
     </div>
   );
 }
