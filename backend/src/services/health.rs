@@ -109,11 +109,7 @@ pub async fn readiness(app: &App) -> HealthReport {
         let mq = mq.clone();
         let (k, v) = timed_check("redis", || {
             let mq = mq.clone();
-            async move {
-                mq.ping()
-                    .await
-                    .map_err(|e| e.to_string())
-            }
+            async move { mq.ping().await.map_err(|e| e.to_string()) }
         })
         .await;
         if v.status == "error" {

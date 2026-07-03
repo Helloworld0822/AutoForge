@@ -178,16 +178,13 @@ pub async fn run_worker(
 
         let available = concurrency.saturating_sub(in_flight.len());
         if available == 0 {
-            if let Some(joined) = in_flight.join_next().await {
-                if let Err(e) = joined {
-                    error!(error = %e, "worker task join failed");
-                }
+            if let Some(Err(e)) = in_flight.join_next().await {
+                error!(error = %e, "worker task join failed");
             }
             continue;
         }
 
-        let mut messages =
-            read_commands_resilient(&mq, &consumer_name, available, 5000).await?;
+        let mut messages = read_commands_resilient(&mq, &consumer_name, available, 5000).await?;
         if let Ok(stale) = mq
             .claim_stale_commands(&consumer_name, STALE_COMMAND_MIN_IDLE_MS, available)
             .await
