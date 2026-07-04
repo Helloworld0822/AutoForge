@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createProject } from '../api/client';
+import { ModelConfigPanel } from '../components/ModelConfigPanel';
+import type { PipelineModelConfig } from '../types';
 
 const DEVOPS_ACCEPT =
   '.md,.markdown,.yaml,.yml,.txt,.pdf,application/pdf,text/markdown,text/plain';
@@ -35,6 +37,7 @@ export function NewProjectPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [modelConfig, setModelConfig] = useState<PipelineModelConfig>({});
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -60,6 +63,7 @@ export function NewProjectPage() {
         repoUrl: repoUrl || undefined,
         devopsPlanText: devopsText || undefined,
         devopsPlanFile: devopsFile,
+        modelConfig,
       });
       navigate(`/projects/${res.id}`);
     } catch (err) {
@@ -89,6 +93,8 @@ export function NewProjectPage() {
       </header>
 
       <div className="mx-auto w-full max-w-4xl px-8 py-8">
+        <ModelConfigPanel value={modelConfig} onChange={setModelConfig} />
+
         <form
           className="mb-8 rounded-xl border border-border bg-surface-container-low p-6 md:p-8"
           onSubmit={onSubmit}
