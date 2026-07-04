@@ -97,6 +97,13 @@ pub struct GitBranch {
     pub pr_url: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct CursorModelInfo {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
 impl CursorClient {
     pub fn new(api_key: impl Into<String>) -> Result<Self> {
         let http = Client::builder()
@@ -224,6 +231,82 @@ impl CursorClient {
             Err(format!("HTTP {status}: {body}"))
         }
     }
+
+    /// 사용 가능한 Cursor 모델 목록
+    pub async fn list_models(&self) -> Result<Vec<CursorModelInfo>> {
+        let resp = self
+            .http
+            .get(format!("{CURSOR_API_BASE}/v1/models"))
+            .basic_auth(&self.api_key, Some(""))
+            .send()
+            .await
+            .map_err(|e| AutoForgeError::CursorApi(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AutoForgeError::CursorApi(format!(
+                "list models failed ({status}): {body}"
+            )));
+        }
+
+        let value: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| AutoForgeError::CursorApi(e.to_string()))?;
+
+        let models = if let Some(arr) = value.get("models").and_then(|v| v.as_array()) {
+            parse_model_array(arr)
+        } else if let Some(arr) = value.as_array() {
+            parse_model_array(arr)
+        } else {
+            vec![]
+        };
+
+        if models.is_empty() {
+            Ok(Self::fallback_models())
+        } else {
+            Ok(models)
+        }
+    }
+
+    pub fn fallback_models() -> Vec<CursorModelInfo> {
+        [
+            ("claude-haiku-4-5", "Claude Haiku 4.5"),
+            ("claude-4.6-sonnet-high-thinking", "Claude Sonnet 4.6"),
+            ("claude-sonnet-5-thinking-high", "Claude Sonnet 5"),
+            ("claude-fable-5-thinking-high", "Claude Fable 5"),
+            ("gpt-5.3-codex-high", "GPT-5.3 Codex"),
+            ("gpt-5.5-medium", "GPT-5.5"),
+            ("composer-2.5", "Composer 2.5"),
+        ]
+        .into_iter()
+        .map(|(id, name)| CursorModelInfo {
+            id: id.into(),
+            name: Some(name.into()),
+        })
+        .collect()
+    }
+}
+
+fn parse_model_array(arr: &[serde_json::Value]) -> Vec<CursorModelInfo> {
+    arr.iter()
+        .filter_map(|item| {
+            let id = item
+                .get("id")
+                .or_else(|| item.get("modelId"))
+                .and_then(|v| v.as_str())?;
+            let name = item
+                .get("name")
+                .or_else(|| item.get("displayName"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            Some(CursorModelInfo {
+                id: id.to_string(),
+                name,
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug, Default)]
