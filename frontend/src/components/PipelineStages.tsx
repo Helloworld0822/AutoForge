@@ -1,4 +1,5 @@
-import { STAGE_META, type StageId, type StageState } from '../types';
+import { resolveStageModel } from './ModelConfigPanel';
+import { STAGE_META, type PipelineModelConfig, type StageId, type StageState } from '../types';
 import {
   CheckCircle2,
   Circle,
@@ -33,13 +34,17 @@ const stageStatusClass: Record<StageState, string> = {
 
 export function PipelineStages({
   stages,
+  modelConfig,
 }: {
   stages: { stage: StageId; status: StageState }[];
+  modelConfig?: PipelineModelConfig;
 }) {
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3">
       {stages.map((s, idx) => {
         const meta = STAGE_META[s.stage];
+        const model =
+          resolveStageModel(s.stage, modelConfig) ?? meta.model;
         return (
           <div
             key={s.stage}
@@ -51,9 +56,12 @@ export function PipelineStages({
             </div>
             <h4 className="mb-1 text-[0.85rem] font-medium">{meta.label}</h4>
             <p className="text-[0.7rem] leading-snug text-muted">{meta.description}</p>
-            {meta.model && (
-              <span className="mt-2 inline-block rounded bg-accent-dim px-1.5 py-0.5 text-[0.65rem] text-accent">
-                {meta.model}
+            {model && (
+              <span
+                className="mt-2 inline-block max-w-full truncate rounded bg-accent-dim px-1.5 py-0.5 text-[0.65rem] text-accent"
+                title={model}
+              >
+                {model}
               </span>
             )}
             <span

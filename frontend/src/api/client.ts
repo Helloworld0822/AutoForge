@@ -5,6 +5,8 @@ import type {
   HealthResponse,
   HostedImage,
   LanguageMode,
+  ModelsListResponse,
+  PipelineModelConfig,
   ProgrammingLanguage,
   Project,
   ProjectDetail,
@@ -38,6 +40,7 @@ export interface CreateProjectOptions {
   devopsPlanFile?: File | null;
   programmingLanguage?: ProgrammingLanguage;
   languageMode?: LanguageMode;
+  modelConfig?: PipelineModelConfig;
 }
 
 export async function getHealth(): Promise<HealthResponse> {
@@ -50,6 +53,10 @@ export async function listProjects(): Promise<Project[]> {
 
 export async function getProject(id: string): Promise<ProjectDetail> {
   return request<ProjectDetail>(`/v1/projects/${id}`);
+}
+
+export async function listModels(): Promise<ModelsListResponse> {
+  return request<ModelsListResponse>('/v1/models');
 }
 
 export async function createProject(
@@ -71,6 +78,9 @@ export async function createProject(
   }
   if (options.programmingLanguage) {
     form.append('programming_language', options.programmingLanguage);
+  }
+  if (options.modelConfig && Object.keys(options.modelConfig).length > 0) {
+    form.append('model_config', JSON.stringify(options.modelConfig));
   }
 
   const res = await fetch(`${API_BASE}/v1/projects`, {

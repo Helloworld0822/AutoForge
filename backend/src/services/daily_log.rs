@@ -142,6 +142,9 @@ pub fn render_markdown(project: &Project, log: &DailyLog) -> String {
             md.push_str("파이프라인이 실패했습니다. Debug/Verify 로그를 확인하세요.\n")
         }
         PipelineState::Running => md.push_str("파이프라인이 실행 중입니다.\n"),
+        PipelineState::AwaitingInput => {
+            md.push_str("아키텍처 설계 질문에 대한 답변을 기다리는 중입니다.\n")
+        }
         PipelineState::Cancelled => md.push_str("프로젝트가 취소되었습니다.\n"),
         PipelineState::Pending => md.push_str("프로젝트가 대기 중입니다.\n"),
     }
@@ -152,7 +155,7 @@ pub fn render_markdown(project: &Project, log: &DailyLog) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{PipelineState, ProjectId};
+    use crate::domain::{PipelineModelConfig, PipelineState, ProjectId};
     use crate::services::orchestrator::DagScheduler;
     use std::collections::HashMap;
 
@@ -166,11 +169,16 @@ mod tests {
             scheduler: DagScheduler::with_quality(ProjectId::new(), 3),
             pdf_bytes: None,
             devops_plan: None,
+            programming_language: None,
+            language_mode: Default::default(),
+            resolved_language: None,
+            architecture_clarifications: Vec::new(),
             stage_outputs: HashMap::new(),
             accumulated_artifacts: Vec::new(),
             slack_message_ts: None,
             created_at: Utc::now(),
             daily_logs: HashMap::new(),
+            model_config: PipelineModelConfig::default(),
         }
     }
 

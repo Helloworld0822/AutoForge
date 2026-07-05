@@ -1,7 +1,7 @@
 use crate::clients::cursor::{CreateAgentOpts, CursorClient};
 use crate::clients::stitch::StitchClient;
 use crate::domain::{
-    ArtifactRef, LanguageMode, ModelProfile, ProgrammingLanguage, StageCommand, StageId,
+    ArtifactRef, LanguageMode, PipelineModelConfig, ProgrammingLanguage, StageCommand, StageId,
 };
 use crate::error::{AutoForgeError, Result};
 use crate::services::architecture_qa::parse_clarification_questions;
@@ -30,6 +30,7 @@ pub struct StageContext {
     pub resolved_language: Option<ProgrammingLanguage>,
     pub architecture_finalize: bool,
     pub architecture_answers: Vec<(String, String)>,
+    pub model_config: PipelineModelConfig,
 }
 
 #[derive(Debug)]
@@ -137,7 +138,7 @@ impl StageExecutor for SummarizeExecutor {
 
     async fn execute(&self, ctx: &StageContext) -> Result<StageOutput> {
         let prompt = build_summarize_prompt(ctx);
-        let profile = ModelProfile::summarize();
+        let profile = ctx.model_config.profile_for(StageId::Summarize);
 
         let resp = ctx
             .cursor
@@ -198,7 +199,7 @@ impl StageExecutor for ArchitectExecutor {
         }
 
         let prompt = build_architect_draft_prompt(ctx);
-        let profile = ModelProfile::architect();
+        let profile = ctx.model_config.profile_for(StageId::Architect);
 
         let resp = ctx
             .cursor
@@ -268,7 +269,8 @@ impl StageExecutor for DesignExecutor {
 
     async fn execute(&self, ctx: &StageContext) -> Result<StageOutput> {
         let prompt = build_design_prompt(&ctx.input);
-        let screen = ctx.stitch.generate_screen(&prompt, "DESKTOP").await?;
+        let device_type = ctx.model_config.design_device_type();
+        let screen = ctx.stitch.generate_screen(&prompt, device_type).await?;
         let html = ctx.stitch.get_screen_html(&screen.id).await?;
 
         let artifact = ArtifactRef {
@@ -301,7 +303,7 @@ impl StageExecutor for ImplementExecutor {
             .ok_or_else(|| AutoForgeError::BadRequest("repo_url required".into()))?;
 
         let prompt = build_implement_prompt(ctx);
-        let profile = ModelProfile::implement();
+        let profile = ctx.model_config.profile_for(StageId::Implement);
 
         let opts = CreateAgentOpts {
             repo_url: Some(repo_url),
@@ -352,7 +354,7 @@ impl StageExecutor for VerifyExecutor {
             .ok_or_else(|| AutoForgeError::BadRequest("repo_url required for verify".into()))?;
 
         let prompt = build_verify_prompt(ctx);
-        let profile = ModelProfile::verify();
+        let profile = ctx.model_config.profile_for(StageId::Verify);
         let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
 
         let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
@@ -410,7 +412,7 @@ impl StageExecutor for DebugExecutor {
             .unwrap_or_else(|| serde_json::json!({ "passed": false }));
 
         let prompt = build_debug_prompt(ctx, &verify_meta);
-        let profile = ModelProfile::debug();
+        let profile = ctx.model_config.profile_for(StageId::Debug);
         let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
 
         let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
@@ -465,7 +467,7 @@ impl StageExecutor for SecurityPatchExecutor {
         })?;
 
         let prompt = build_security_prompt(ctx);
-        let profile = ModelProfile::security_patch();
+        let profile = ctx.model_config.profile_for(StageId::SecurityPatch);
         let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
 
         let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
@@ -622,7 +624,7 @@ async fn run_architect_finalize_with_answers(
     answers: &[(String, String)],
 ) -> Result<StageOutput> {
     let prompt = build_architect_finalize_prompt(ctx, answers);
-    let profile = ModelProfile::architect();
+    let profile = ctx.model_config.profile_for(StageId::Architect);
 
     let resp = ctx
         .cursor
@@ -706,7 +708,7 @@ fn build_implement_prompt(ctx: &StageContext) -> String {
     let inputs = &ctx.input;
     let has_devops = inputs.iter().any(|a| a.name.starts_with("devops_plan"));
     let devops_note = if has_devops {
-        "DevOps 계획서에 따라 Dockerfile, docker-compose.yml, CI/CD 워크플로우(.github/workflows), \
+        "DevOps 계획서에 따라 Containerfile, compose.yml, CI/CD 워크플로우(.github/workflows), \
          nginx/인프라 설정을 구현하세요. 배포 자동화를 포함하세요.\n"
     } else {
         ""

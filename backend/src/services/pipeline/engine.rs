@@ -10,6 +10,7 @@ use crate::services::daily_log_notify::record_daily_event;
 use crate::services::github::try_auto_merge_pr;
 use crate::services::worker::{executors, StageContext, StageOutput};
 use bytes::Bytes;
+use std::sync::Arc;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -74,6 +75,7 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
         resolved_language: project.resolved_language,
         architecture_finalize,
         architecture_answers,
+        model_config: project.model_config.clone(),
     };
 
     executor.execute(&ctx).await
@@ -338,7 +340,7 @@ fn parse_architect_questions(metadata: &serde_json::Value) -> Vec<ArchitectureCl
 
 /// 아키텍처 Q&A 답변 제출 후 파이프라인 재개
 pub async fn submit_architecture_answers(
-    app: &App,
+    _app: &App,
     project: &mut Project,
     answers: Vec<crate::domain::ArchitectureAnswerInput>,
 ) -> Result<()> {

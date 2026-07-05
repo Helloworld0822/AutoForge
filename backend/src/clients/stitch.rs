@@ -123,4 +123,32 @@ impl StitchClient {
 
         serde_json::from_value(result).map_err(|e| AutoForgeError::StitchApi(e.to_string()))
     }
+
+    /// Stitch MCP 엔드포인트 연결 확인
+    pub async fn health_check(&self) -> std::result::Result<(), String> {
+        let body = McpRequest {
+            jsonrpc: "2.0",
+            id: 0,
+            method: "tools/list",
+            params: serde_json::json!({}),
+        };
+
+        let resp = self
+            .http
+            .post(STITCH_MCP_BASE)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .timeout(Duration::from_secs(15))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            Err(format!("HTTP {status}: {body}"))
+        }
+    }
 }

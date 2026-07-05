@@ -64,6 +64,7 @@ export interface Project {
   language_mode: LanguageMode;
   awaiting_architecture_input: boolean;
   architecture_clarifications: ArchitectureClarification[];
+  model_config?: PipelineModelConfig;
   created_at: string;
 }
 
@@ -124,6 +125,26 @@ export interface HealthResponse {
   github_auto_merge: boolean;
 }
 
+export interface PipelineModelConfig {
+  summarize?: string;
+  architect?: string;
+  implement?: string;
+  verify?: string;
+  debug?: string;
+  security_patch?: string;
+  design_device_type?: string;
+}
+
+export interface CursorModel {
+  id: string;
+  name?: string | null;
+}
+
+export interface ModelsListResponse {
+  models: CursorModel[];
+  defaults: PipelineModelConfig;
+}
+
 export const STAGE_META: Record<
   StageId,
   { label: string; description: string; model?: string }
@@ -132,12 +153,12 @@ export const STAGE_META: Record<
   summarize: {
     label: 'Summarize',
     description: '계획서 구조화 요약',
-    model: 'Sonnet',
+    model: 'Haiku',
   },
   architect: {
     label: 'Architect',
     description: '시스템 아키텍처 & 상세 기획',
-    model: 'Fable',
+    model: 'Sonnet',
   },
   design: { label: 'Design', description: 'UI 디자인 생성', model: 'Stitch' },
   implement: {

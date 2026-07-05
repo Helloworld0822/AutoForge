@@ -100,6 +100,7 @@ impl App {
         repo_url: Option<String>,
         programming_language: Option<crate::domain::ProgrammingLanguage>,
         language_mode: crate::domain::LanguageMode,
+        model_config: crate::domain::PipelineModelConfig,
     ) -> Project {
         let id = ProjectId::new();
         let project = Project {
@@ -123,6 +124,7 @@ impl App {
             slack_message_ts: None,
             created_at: chrono::Utc::now(),
             daily_logs: HashMap::new(),
+            model_config,
         };
         let _ = self.store.save(&project).await;
         project

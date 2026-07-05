@@ -73,7 +73,7 @@ pub struct ModelParam {
 impl ModelProfile {
     pub fn summarize() -> Self {
         Self {
-            model_id: "claude-4.6-sonnet-high-thinking".into(),
+            model_id: "claude-haiku-4-5".into(),
             mode: AgentMode::Agent,
             params: vec![],
         }
@@ -81,7 +81,7 @@ impl ModelProfile {
 
     pub fn architect() -> Self {
         Self {
-            model_id: "claude-fable-5-thinking-high".into(),
+            model_id: "claude-4.6-sonnet-high-thinking".into(),
             mode: AgentMode::Plan,
             params: vec![],
         }
@@ -116,6 +116,85 @@ impl ModelProfile {
             model_id: "claude-fable-5-thinking-high".into(),
             mode: AgentMode::Agent,
             params: vec![],
+        }
+    }
+
+    pub fn for_stage(stage: StageId) -> Self {
+        match stage {
+            StageId::Summarize => Self::summarize(),
+            StageId::Architect => Self::architect(),
+            StageId::Implement => Self::implement(),
+            StageId::Verify => Self::verify(),
+            StageId::Debug => Self::debug(),
+            StageId::SecurityPatch => Self::security_patch(),
+            _ => Self::summarize(),
+        }
+    }
+}
+
+/// 프로젝트별 AI 모델 오버라이드 (None이면 기본값 사용)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PipelineModelConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summarize: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub architect: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub implement: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_patch: Option<String>,
+    /// Stitch 디자인 단계 디바이스 타입 (DESKTOP | MOBILE)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_device_type: Option<String>,
+}
+
+impl PipelineModelConfig {
+    pub fn profile_for(&self, stage: StageId) -> ModelProfile {
+        let default = ModelProfile::for_stage(stage);
+        let override_id = match stage {
+            StageId::Summarize => self.summarize.as_deref(),
+            StageId::Architect => self.architect.as_deref(),
+            StageId::Implement => self.implement.as_deref(),
+            StageId::Verify => self.verify.as_deref(),
+            StageId::Debug => self.debug.as_deref(),
+            StageId::SecurityPatch => self.security_patch.as_deref(),
+            _ => None,
+        };
+        if let Some(id) = override_id.filter(|s| !s.is_empty()) {
+            ModelProfile {
+                model_id: id.to_string(),
+                mode: default.mode,
+                params: vec![],
+            }
+        } else {
+            default
+        }
+    }
+
+    pub fn resolved_model_id(&self, stage: StageId) -> String {
+        self.profile_for(stage).model_id
+    }
+
+    pub fn design_device_type(&self) -> &str {
+        self.design_device_type
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("DESKTOP")
+    }
+
+    pub fn defaults_view() -> Self {
+        Self {
+            summarize: Some(ModelProfile::summarize().model_id),
+            architect: Some(ModelProfile::architect().model_id),
+            implement: Some(ModelProfile::implement().model_id),
+            verify: Some(ModelProfile::verify().model_id),
+            debug: Some(ModelProfile::debug().model_id),
+            security_patch: Some(ModelProfile::security_patch().model_id),
+            design_device_type: Some("DESKTOP".into()),
         }
     }
 }
@@ -417,6 +496,9 @@ pub struct Project {
     /// 일별 경과 로그 (YYYY-MM-DD → DailyLog)
     #[serde(default)]
     pub daily_logs: HashMap<String, DailyLog>,
+    /// 스테이지별 AI 모델 설정
+    #[serde(default)]
+    pub model_config: PipelineModelConfig,
 }
 
 impl Project {
@@ -456,6 +538,7 @@ pub struct ProjectView {
     pub language_mode: LanguageMode,
     pub awaiting_architecture_input: bool,
     pub architecture_clarifications: Vec<ArchitectureClarification>,
+    pub model_config: PipelineModelConfig,
     pub created_at: DateTime<Utc>,
 }
 
@@ -511,6 +594,7 @@ impl From<&Project> for ProjectView {
             language_mode: p.language_mode,
             awaiting_architecture_input: p.state == PipelineState::AwaitingInput,
             architecture_clarifications: p.architecture_clarifications.clone(),
+            model_config: p.model_config.clone(),
             created_at: p.created_at,
         }
     }

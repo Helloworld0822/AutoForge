@@ -1,19 +1,32 @@
 @import 'tailwindcss';
 
 @theme {
+  --font-headline: 'Hanken Grotesk', ui-sans-serif, system-ui, sans-serif;
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --color-bg: #0b0d12;
-  --color-bg-elevated: #12151c;
-  --color-card: #161a22;
-  --color-border: #252a36;
-  --color-foreground: #eef0f4;
-  --color-muted: #8b93a7;
-  --color-accent: #6c9eff;
-  --color-accent-dim: color-mix(in srgb, #6c9eff 15%, transparent);
-  --color-success: #34d399;
-  --color-warn: #fbbf24;
-  --color-error: #f87171;
-  --radius-lg: 12px;
+  --font-label: 'Geist', ui-monospace, monospace;
+
+  --color-bg: #0b1326;
+  --color-bg-elevated: #171f33;
+  --color-card: #131b2e;
+  --color-border: #424753;
+  --color-foreground: #dae2fd;
+  --color-muted: #c2c6d5;
+  --color-outline: #8c909f;
+  --color-accent: #5891ff;
+  --color-accent-dim: color-mix(in srgb, #5891ff 15%, transparent);
+  --color-primary: #afc6ff;
+  --color-secondary: #4edea3;
+  --color-tertiary: #ffb95f;
+  --color-success: #4edea3;
+  --color-warn: #ffb95f;
+  --color-error: #ffb4ab;
+  --color-surface-variant: #2d3449;
+  --color-surface-container-high: #222a3d;
+  --color-surface-container-highest: #2d3449;
+  --color-surface-container-low: #131b2e;
+  --color-surface-container-lowest: #060e20;
+  --radius-lg: 0.25rem;
+  --radius-xl: 0.5rem;
 }
 
 @layer base {
@@ -23,7 +36,8 @@
 
   body {
     @apply min-h-screen bg-bg font-sans text-foreground antialiased;
-    background: radial-gradient(ellipse at top, #141824 0%, var(--color-bg) 60%);
+    background-color: #0b1326;
+    color: #dae2fd;
   }
 
   a {
@@ -34,5 +48,52 @@
   input,
   textarea {
     font: inherit;
+  }
+}
+
+@layer utilities {
+  .font-headline {
+    font-family: var(--font-headline);
+  }
+
+  .font-label {
+    font-family: var(--font-label);
+  }
+
+  .material-symbols-outlined {
+    font-family: 'Material Symbols Outlined';
+    font-weight: normal;
+    font-style: normal;
+    font-size: 24px;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  }
+
+  .material-symbols-filled {
+    font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: #171f33;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #424753;
+    border-radius: 2px;
+  }
+
+  .code-editor {
+    font-family: var(--font-label);
+    background: #060e20;
   }
 }

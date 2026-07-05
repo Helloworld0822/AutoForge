@@ -147,7 +147,7 @@ export function ProjectDetailPage() {
 
       <section className="mb-5 rounded-lg border border-border bg-card p-5 md:p-6">
         <h3 className="mb-4 text-base font-medium">파이프라인 스테이지</h3>
-        <PipelineStages stages={project.stages} />
+        <PipelineStages stages={project.stages} modelConfig={project.model_config} />
       </section>
 
       <DailyLogPanel projectId={project.id} />

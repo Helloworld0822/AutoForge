@@ -1,13 +1,14 @@
 use crate::app::App;
 use crate::domain::{
-    ArchitectureAnswerInput, DailyLogSummary, DevopsPlanInput, LanguageMode, PipelineState,
-    ProgrammingLanguage, ProjectDetailView, ProjectView, StageState,
+    ArchitectureAnswerInput, DailyLogSummary, DevopsPlanInput, LanguageMode, PipelineModelConfig,
+    PipelineState, ProgrammingLanguage, ProjectDetailView, ProjectView, StageState,
 };
 use crate::error::{AutoForgeError, Result};
 use crate::services::artifacts::{
     detect_image_extension, guess_image_content_type, ArtifactStore, MEDIA_DIR,
 };
 use crate::services::github::ensure_project_repo;
+use crate::services::health::{self, HealthReport};
 use crate::services::pipeline::engine::{
     resume_project_pipeline, run_inline, submit_architecture_answers as apply_architecture_answers,
 };
@@ -20,47 +21,30 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Liveness — 프로세스 생존 확인 (의존성 프로브 없음)
 pub async fn health(app: web::Data<Arc<App>>) -> HttpResponse {
+    let mut report = HealthReport::liveness();
+    report.message_queue = app.queue.is_some();
+    report.worker_concurrency = app.config.worker_concurrency;
+    report.github_auto_merge = app.config.github_auto_merge;
     HttpResponse::Ok().json(serde_json::json!({
-        "status": "ok",
-        "service": "autoforge",
-        "message_queue": app.queue.is_some(),
-        "slack": app.slack.is_some(),
-        "github": app.github.is_some(),
-        "github_auto_merge": app.config.github_auto_merge,
+        "status": report.status,
+        "service": report.service,
+        "message_queue": report.message_queue,
+        "worker_concurrency": report.worker_concurrency,
+        "github_auto_merge": report.github_auto_merge,
         "auth_enabled": app.config.auth_enabled(),
     }))
 }
 
-/// 의존성(스토어/아티팩트/큐) 연결 상태를 점검하는 readiness probe.
-/// 하나라도 비정상이면 503을 반환한다.
+/// Readiness — 스토어/큐/AI API 연결 확인
 pub async fn ready(app: web::Data<Arc<App>>) -> HttpResponse {
-    let store_ok = app.store.list().await.is_ok();
-    let artifacts_durable = app.artifacts.is_durable();
-
-    let queue_ok = if let Some(mq) = &app.queue {
-        mq.ping().await.is_ok()
+    let report = health::readiness(app.get_ref()).await;
+    if report.status == "unhealthy" {
+        HttpResponse::ServiceUnavailable().json(report)
     } else {
-        true
-    };
-
-    let checks = serde_json::json!({
-        "store": store_ok,
-        "artifacts_durable": artifacts_durable,
-        "queue": queue_ok,
-    });
-
-    let ready = store_ok && queue_ok;
-    let mut status = if ready {
-        HttpResponse::Ok()
-    } else {
-        HttpResponse::ServiceUnavailable()
-    };
-
-    status.json(serde_json::json!({
-        "status": if ready { "ready" } else { "not_ready" },
-        "checks": checks,
-    }))
+        HttpResponse::Ok().json(report)
+    }
 }
 
 pub async fn list_projects(app: web::Data<Arc<App>>) -> Result<HttpResponse> {
@@ -88,6 +72,7 @@ pub async fn create_project(
     let mut language_mode = LanguageMode::Auto;
     let mut pdf_bytes: Option<Vec<u8>> = None;
     let mut devops_plan = DevopsPlanInput::default();
+    let mut model_config = PipelineModelConfig::default();
     let max_upload = app.config.max_upload_bytes;
     let mut total_bytes: usize = 0;
 
@@ -155,12 +140,13 @@ pub async fn create_project(
             "programming_language" | "language" => {
                 let value = String::from_utf8_lossy(&data).trim().to_lowercase();
                 if !value.is_empty() && value != "auto" {
-                    programming_language =
+                    programming_language = Some(
                         ProgrammingLanguage::from_str_loose(&value).ok_or_else(|| {
                             AutoForgeError::BadRequest(format!(
                                 "unsupported programming_language: {value}"
                             ))
-                        })?;
+                        })?,
+                    );
                 }
             }
             "language_mode" => {
@@ -176,6 +162,14 @@ pub async fn create_project(
                 };
             }
             "plan" | "pdf" | "file" => pdf_bytes = Some(data),
+            "model_config" | "models" => {
+                let text = String::from_utf8_lossy(&data);
+                if !text.trim().is_empty() {
+                    model_config = serde_json::from_str(&text).map_err(|e| {
+                        AutoForgeError::BadRequest(format!("invalid model_config JSON: {e}"))
+                    })?;
+                }
+            }
             _ => {}
         }
     }
@@ -198,7 +192,13 @@ pub async fn create_project(
     }
 
     let mut project = app
-        .create_project(name, repo_url, programming_language, language_mode)
+        .create_project(
+            name,
+            repo_url,
+            programming_language,
+            language_mode,
+            model_config,
+        )
         .await;
     project.pdf_bytes = Some(pdf);
     if devops_plan.has_content() {
@@ -248,6 +248,7 @@ pub async fn create_project(
         "has_devops_plan": project.devops_plan.as_ref().is_some_and(|d| d.has_content()),
         "programming_language": project.programming_language.map(|l| l.as_str()),
         "language_mode": project.language_mode,
+        "model_config": project.model_config,
     })))
 }
 
@@ -281,6 +282,21 @@ pub async fn submit_architecture_answers(
         "state": project.state,
         "message": "architecture answers submitted, pipeline resumed",
         "architecture_clarifications": project.architecture_clarifications,
+    })))
+}
+
+pub async fn list_models(app: web::Data<Arc<App>>) -> Result<HttpResponse> {
+    use crate::clients::cursor::CursorClient;
+
+    let models = app
+        .cursor
+        .list_models()
+        .await
+        .unwrap_or_else(|_| CursorClient::fallback_models());
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "models": models,
+        "defaults": PipelineModelConfig::defaults_view(),
     })))
 }
 
