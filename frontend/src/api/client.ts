@@ -1,4 +1,5 @@
 import type {
+  AuthMeResponse,
   CreateProjectResponse,
   DailyLog,
   DailyLogSummary,
@@ -21,11 +22,16 @@ function authHeaders(existing?: HeadersInit): HeadersInit {
   return { ...(existing ?? {}), Authorization: `Bearer ${API_KEY}` };
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+function fetchOptions(init?: RequestInit): RequestInit {
+  return {
+    credentials: 'include',
     ...init,
     headers: authHeaders(init?.headers),
-  });
+  };
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, fetchOptions(init));
   if (!res.ok) {
     const body = await res.text();
     throw new Error(body || `HTTP ${res.status}`);
@@ -45,6 +51,22 @@ export interface CreateProjectOptions {
 
 export async function getHealth(): Promise<HealthResponse> {
   return request<HealthResponse>('/health');
+}
+
+export async function getAuthMe(): Promise<AuthMeResponse> {
+  return request<AuthMeResponse>('/v1/auth/me');
+}
+
+export async function login(username: string, password: string): Promise<void> {
+  await request('/v1/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export async function logout(): Promise<void> {
+  await request('/v1/auth/logout', { method: 'POST' });
 }
 
 export async function listProjects(): Promise<Project[]> {
@@ -83,11 +105,10 @@ export async function createProject(
     form.append('model_config', JSON.stringify(options.modelConfig));
   }
 
-  const res = await fetch(`${API_BASE}/v1/projects`, {
+  const res = await fetch(`${API_BASE}/v1/projects`, fetchOptions({
     method: 'POST',
-    headers: authHeaders(),
     body: form,
-  });
+  }));
 
   if (!res.ok) {
     const body = await res.text();
@@ -145,11 +166,10 @@ export async function uploadImage(file: File): Promise<UploadImageResponse> {
   const form = new FormData();
   form.append('image', file);
 
-  const res = await fetch(`${API_BASE}/v1/images`, {
+  const res = await fetch(`${API_BASE}/v1/images`, fetchOptions({
     method: 'POST',
-    headers: authHeaders(),
     body: form,
-  });
+  }));
 
   if (!res.ok) {
     const body = await res.text();

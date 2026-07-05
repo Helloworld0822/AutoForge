@@ -34,6 +34,7 @@ pub async fn health(app: web::Data<Arc<App>>) -> HttpResponse {
         "worker_concurrency": report.worker_concurrency,
         "github_auto_merge": report.github_auto_merge,
         "auth_enabled": app.config.auth_enabled(),
+        "session_login_enabled": app.config.session_login_enabled(),
     }))
 }
 

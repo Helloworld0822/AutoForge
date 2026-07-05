@@ -116,6 +116,13 @@ export interface UploadImageResponse {
   content_type: string;
 }
 
+export interface AuthMeResponse {
+  authenticated: boolean;
+  username: string | null;
+  session_login_enabled: boolean;
+  api_key_enabled: boolean;
+}
+
 export interface HealthResponse {
   status: string;
   service: string;

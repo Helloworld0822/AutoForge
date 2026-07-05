@@ -33,6 +33,12 @@ pub struct Config {
     /// 설정 시 /v1/* API에 `Authorization: Bearer <key>` 인증을 강제한다.
     /// 미설정 시 인증 없이 API가 열려있으므로(개발용) 운영 환경에서는 반드시 설정할 것.
     pub api_key: Option<String>,
+    /// 웹 로그인 아이디 — `LOGIN_PASSWORD`와 함께 설정 시 세션 쿠키 인증을 활성화한다.
+    pub login_username: Option<String>,
+    /// 웹 로그인 비밀번호
+    pub login_password: Option<String>,
+    /// 세션 쿠키 서명 키 (로그인 활성화 시 필수, 32자 이상 권장)
+    pub session_secret: Option<String>,
     /// CORS 허용 오리진 (콤마 구분). 미설정 시 모든 오리진 허용(개발용).
     pub cors_allowed_origins: Option<Vec<String>>,
     /// 업로드 최대 크기 (bytes, 기본 50MB)
@@ -82,6 +88,9 @@ impl Config {
                 .unwrap_or(true),
             public_url: env::var("PUBLIC_URL").unwrap_or_else(|_| "http://localhost".into()),
             api_key: env::var("API_KEY").ok().filter(|v| !v.is_empty()),
+            login_username: env::var("LOGIN_USERNAME").ok().filter(|v| !v.is_empty()),
+            login_password: env::var("LOGIN_PASSWORD").ok().filter(|v| !v.is_empty()),
+            session_secret: env::var("SESSION_SECRET").ok().filter(|v| !v.is_empty()),
             cors_allowed_origins: env::var("CORS_ALLOWED_ORIGINS").ok().map(|v| {
                 v.split(',')
                     .map(|s| s.trim().to_string())
@@ -122,8 +131,14 @@ impl Config {
             || (self.slack_bot_token.is_some() && self.slack_channel.is_some())
     }
 
+    pub fn session_login_enabled(&self) -> bool {
+        self.login_username.is_some()
+            && self.login_password.is_some()
+            && self.session_secret.is_some()
+    }
+
     pub fn auth_enabled(&self) -> bool {
-        self.api_key.is_some()
+        self.api_key.is_some() || self.session_login_enabled()
     }
 
     /// 필수/권장 설정 누락을 점검하고 경고를 남긴다. 서버는 계속 기동하되
@@ -135,10 +150,22 @@ impl Config {
         if self.stitch_api_key.is_empty() {
             tracing::warn!("STITCH_API_KEY is not set — Design stage will fail");
         }
+        if self.login_username.is_some() ^ self.login_password.is_some() {
+            tracing::warn!(
+                "LOGIN_USERNAME and LOGIN_PASSWORD must both be set to enable session login"
+            );
+        }
+        if (self.login_username.is_some() || self.login_password.is_some())
+            && self.session_secret.is_none()
+        {
+            tracing::warn!(
+                "SESSION_SECRET is not set — session login is disabled until a secret is configured"
+            );
+        }
         if !self.auth_enabled() {
             tracing::warn!(
-                "API_KEY is not set — the REST API is running WITHOUT authentication. \
-                 Set API_KEY before exposing this service publicly."
+                "API_KEY / LOGIN credentials are not set — the REST API is running WITHOUT authentication. \
+                 Set API_KEY or LOGIN_USERNAME+LOGIN_PASSWORD+SESSION_SECRET before exposing this service publicly."
             );
         }
         if self.github_enabled() && self.github_token.as_deref().unwrap_or_default().len() < 10 {
