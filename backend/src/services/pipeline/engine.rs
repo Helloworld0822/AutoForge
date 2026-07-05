@@ -1,6 +1,10 @@
 use crate::app::App;
-use crate::domain::{ArtifactRef, PipelineState, Project, StageCompleted, StageId, StageState};
+use crate::domain::{
+    ArchitectureClarification, ArtifactRef, LanguageMode, PipelineState, ProgrammingLanguage,
+    Project, StageCompleted, StageId, StageState,
+};
 use crate::error::{AutoForgeError, Result};
+use crate::services::architecture_qa::all_required_answered;
 use crate::services::daily_log::DailyEvent;
 use crate::services::daily_log_notify::record_daily_event;
 use crate::services::github::try_auto_merge_pr;
@@ -39,6 +43,16 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
         .and_then(|v| v.as_str())
         .map(String::from);
 
+    let architecture_finalize = project.scheduler.architecture.draft_done
+        && !project.scheduler.architecture.awaiting_answers
+        && !project.scheduler.architecture.finalized;
+
+    let architecture_answers: Vec<(String, String)> = project
+        .architecture_clarifications
+        .iter()
+        .filter_map(|q| q.answer.as_ref().map(|a| (q.id.clone(), a.clone())))
+        .collect();
+
     let ctx = StageContext {
         command: crate::domain::StageCommand {
             project_id: project.id.clone(),
@@ -55,6 +69,11 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
             .or(app.config.default_repo_url.clone()),
         stage_outputs: project.stage_outputs.clone(),
         pr_url,
+        language_mode: project.language_mode,
+        programming_language: project.programming_language,
+        resolved_language: project.resolved_language,
+        architecture_finalize,
+        architecture_answers,
     };
 
     executor.execute(&ctx).await
@@ -88,6 +107,50 @@ pub fn apply_stage_output(
     project.stage_outputs.insert(stage, output.metadata.clone());
 
     match stage {
+        StageId::Summarize => {
+            if project.language_mode == LanguageMode::Manual {
+                if let Some(lang) = project.programming_language {
+                    project.resolved_language = Some(lang);
+                }
+            } else if let Some(lang_str) = output
+                .metadata
+                .get("programming_language")
+                .and_then(|v| v.as_str())
+            {
+                if let Some(lang) = ProgrammingLanguage::from_str_loose(lang_str) {
+                    project.resolved_language = Some(lang);
+                }
+            }
+            project.stages.insert(stage, StageState::Completed);
+            project.scheduler.mark_completed(&StageCompleted {
+                project_id: project.id.clone(),
+                stage,
+                output_artifacts: output.artifacts,
+            });
+        }
+        StageId::Architect => {
+            let phase = output
+                .metadata
+                .get("phase")
+                .and_then(|v| v.as_str())
+                .unwrap_or("finalize");
+
+            if phase == "draft" {
+                project.architecture_clarifications = parse_architect_questions(&output.metadata);
+                project.scheduler.record_architect_draft();
+                project.stages.insert(stage, StageState::Running);
+                project.state = PipelineState::AwaitingInput;
+                return Ok(PipelineOutcome::AwaitingInput);
+            }
+
+            project.scheduler.record_architect_finalized();
+            project.stages.insert(stage, StageState::Completed);
+            project.scheduler.mark_completed(&StageCompleted {
+                project_id: project.id.clone(),
+                stage,
+                output_artifacts: output.artifacts,
+            });
+        }
         StageId::Verify => {
             let passed = output
                 .metadata
@@ -224,9 +287,119 @@ fn devops_storage_name(devops: &crate::domain::DevopsPlanInput) -> String {
     "devops_plan.md".into()
 }
 
+fn parse_architect_questions(metadata: &serde_json::Value) -> Vec<ArchitectureClarification> {
+    metadata
+        .get("questions")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    let question = item
+                        .get("question")
+                        .or_else(|| item.get("text"))
+                        .and_then(|v| v.as_str())?
+                        .to_string();
+                    let id = item
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("q")
+                        .to_string();
+                    let options = item
+                        .get("options")
+                        .and_then(|v| v.as_array())
+                        .map(|opts| {
+                            opts.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let required = item
+                        .get("required")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    let category = item
+                        .get("category")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    Some(ArchitectureClarification {
+                        id,
+                        question,
+                        options,
+                        required,
+                        category,
+                        answer: None,
+                        answered_at: None,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 아키텍처 Q&A 답변 제출 후 파이프라인 재개
+pub async fn submit_architecture_answers(
+    app: &App,
+    project: &mut Project,
+    answers: Vec<crate::domain::ArchitectureAnswerInput>,
+) -> Result<()> {
+    if project.state != PipelineState::AwaitingInput {
+        return Err(AutoForgeError::BadRequest(
+            "project is not awaiting architecture input".into(),
+        ));
+    }
+
+    for input in answers {
+        if let Some(q) = project
+            .architecture_clarifications
+            .iter_mut()
+            .find(|q| q.id == input.id)
+        {
+            q.answer = Some(input.answer.trim().to_string());
+            q.answered_at = Some(chrono::Utc::now());
+        }
+    }
+
+    if !all_required_answered(&project.architecture_clarifications) {
+        return Err(AutoForgeError::BadRequest(
+            "all required architecture questions must be answered".into(),
+        ));
+    }
+
+    project.scheduler.record_architect_answers_submitted();
+    project
+        .stages
+        .insert(StageId::Architect, StageState::Queued);
+    project.state = PipelineState::Running;
+    Ok(())
+}
+
+pub async fn resume_project_pipeline(app: Arc<App>, project_id: Uuid) -> Result<()> {
+    if app.config.message_queue_enabled() && app.queue.is_some() {
+        let project = app
+            .store
+            .get(project_id)
+            .await?
+            .ok_or_else(|| AutoForgeError::NotFound(format!("project {project_id}")))?;
+        let cmds = project.scheduler.ready_stages();
+        if let Some(mq) = &app.queue {
+            mq.enqueue_commands(&cmds).await?;
+        }
+        Ok(())
+    } else {
+        let app_clone = app.clone();
+        tokio::spawn(async move {
+            if let Err(e) = run_inline(app_clone, project_id).await {
+                tracing::error!(%project_id, error = %e, "pipeline resume failed");
+            }
+        });
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub enum PipelineOutcome {
     Continue,
+    AwaitingInput,
     Completed,
     Failed(String),
 }
@@ -239,30 +412,40 @@ pub async fn run_inline(app: std::sync::Arc<App>, project_id: Uuid) -> Result<()
         .await?
         .ok_or_else(|| AutoForgeError::NotFound(format!("project {project_id}")))?;
 
-    project.state = PipelineState::Running;
-    app.store.save(&project).await?;
-    prepare_project_pdf(&app, &mut project).await?;
-    app.store.save(&project).await?;
+    let is_fresh = project.stages.get(&StageId::Ingest) != Some(&StageState::Completed);
 
-    if let Some(slack) = &app.slack {
-        if let Ok(Some(ts)) = slack.notify_project_created(&project).await {
-            project.slack_message_ts = Some(ts);
-            app.store.save(&project).await?;
+    if is_fresh {
+        project.state = PipelineState::Running;
+        app.store.save(&project).await?;
+        prepare_project_pdf(&app, &mut project).await?;
+        app.store.save(&project).await?;
+
+        if let Some(slack) = &app.slack {
+            if let Ok(Some(ts)) = slack.notify_project_created(&project).await {
+                project.slack_message_ts = Some(ts);
+                app.store.save(&project).await?;
+            }
         }
+
+        let _ = record_daily_event(
+            &app,
+            &mut project,
+            DailyEvent {
+                event: "project_created",
+                stage: None,
+                message: "프로젝트 생성 및 파이프라인 시작".into(),
+            },
+        )
+        .await;
     }
 
-    let _ = record_daily_event(
-        &app,
-        &mut project,
-        DailyEvent {
-            event: "project_created",
-            stage: None,
-            message: "프로젝트 생성 및 파이프라인 시작".into(),
-        },
-    )
-    .await;
-
     loop {
+        if project.state == PipelineState::AwaitingInput {
+            app.store.save(&project).await?;
+            info!(%project_id, "pipeline paused awaiting architecture input");
+            return Ok(());
+        }
+
         let commands = project.scheduler.ready_stages();
         if commands.is_empty() {
             if project.scheduler.is_pipeline_complete() {
@@ -280,6 +463,11 @@ pub async fn run_inline(app: std::sync::Arc<App>, project_id: Uuid) -> Result<()
                 project.state = PipelineState::Failed;
                 app.store.save(&project).await?;
                 return Err(AutoForgeError::Orchestrator("quality gate failed".into()));
+            }
+            if project.scheduler.is_awaiting_architecture_input() {
+                project.state = PipelineState::AwaitingInput;
+                app.store.save(&project).await?;
+                return Ok(());
             }
             break;
         }
@@ -407,6 +595,21 @@ pub async fn run_inline(app: std::sync::Arc<App>, project_id: Uuid) -> Result<()
                                 stage,
                                 message: msg,
                             });
+                        }
+                        PipelineOutcome::AwaitingInput => {
+                            let _ = record_daily_event(
+                                &app,
+                                &mut project,
+                                DailyEvent {
+                                    event: "architecture_input_required",
+                                    stage: Some(stage),
+                                    message: "아키텍처 설계 질문에 대한 답변 필요".into(),
+                                },
+                            )
+                            .await;
+                            app.store.save(&project).await?;
+                            info!(%project_id, "pipeline paused for architecture Q&A");
+                            return Ok(());
                         }
                         PipelineOutcome::Continue => {}
                     }

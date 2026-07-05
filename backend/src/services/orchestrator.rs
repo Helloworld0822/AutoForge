@@ -43,6 +43,30 @@ impl QualityGate {
     }
 }
 
+/// 아키텍처 설계 Q&A 게이트 — draft 질문 생성 → 사용자 답변 → finalize
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ArchitectureGate {
+    pub draft_done: bool,
+    pub awaiting_answers: bool,
+    pub finalized: bool,
+}
+
+impl ArchitectureGate {
+    pub fn record_draft(&mut self) {
+        self.draft_done = true;
+        self.awaiting_answers = true;
+    }
+
+    pub fn record_answers_submitted(&mut self) {
+        self.awaiting_answers = false;
+    }
+
+    pub fn record_finalized(&mut self) {
+        self.finalized = true;
+        self.awaiting_answers = false;
+    }
+}
+
 /// DAG 스케줄러 — 순수 로직, I/O 없음
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagScheduler {
@@ -51,6 +75,7 @@ pub struct DagScheduler {
     failed: Option<StageId>,
     project_id: ProjectId,
     pub quality: QualityGate,
+    pub architecture: ArchitectureGate,
 }
 
 impl DagScheduler {
@@ -61,6 +86,7 @@ impl DagScheduler {
             failed: None,
             project_id: ProjectId::new(),
             quality: QualityGate::default(),
+            architecture: ArchitectureGate::default(),
         }
     }
 
@@ -120,6 +146,25 @@ impl DagScheduler {
         self.completed.insert(StageId::SecurityPatch);
     }
 
+    pub fn record_architect_draft(&mut self) {
+        self.running.remove(&StageId::Architect);
+        self.architecture.record_draft();
+    }
+
+    pub fn record_architect_answers_submitted(&mut self) {
+        self.architecture.record_answers_submitted();
+    }
+
+    pub fn record_architect_finalized(&mut self) {
+        self.running.remove(&StageId::Architect);
+        self.architecture.record_finalized();
+        self.completed.insert(StageId::Architect);
+    }
+
+    pub fn is_awaiting_architecture_input(&self) -> bool {
+        self.architecture.awaiting_answers
+    }
+
     pub fn ready_stages(&self) -> Vec<StageCommand> {
         if self.failed.is_some() {
             return vec![];
@@ -143,14 +188,21 @@ impl DagScheduler {
         }
 
         if self.completed.contains(&StageId::Summarize) {
-            for stage in [StageId::Architect, StageId::Design] {
-                if !self.completed.contains(&stage) && !self.running.contains(&stage) {
-                    ready.push(stage);
-                }
+            if !self.architecture.finalized
+                && !self.architecture.awaiting_answers
+                && !self.running.contains(&StageId::Architect)
+            {
+                ready.push(StageId::Architect);
+            }
+
+            if !self.completed.contains(&StageId::Design)
+                && !self.running.contains(&StageId::Design)
+            {
+                ready.push(StageId::Design);
             }
         }
 
-        let arch_done = self.completed.contains(&StageId::Architect);
+        let arch_done = self.architecture.finalized;
         let design_done = self.completed.contains(&StageId::Design);
         if arch_done
             && design_done
@@ -280,11 +332,41 @@ mod tests {
     }
 
     #[test]
-    fn implement_waits_for_both_architect_and_design() {
+    fn architect_awaiting_answers_blocks_implement() {
         let mut sched = DagScheduler::new();
-        for stage in [StageId::Ingest, StageId::Summarize, StageId::Architect] {
+        for stage in [StageId::Ingest, StageId::Summarize] {
             complete_through(&mut sched, stage);
         }
+        sched.record_architect_draft();
+        complete_through(&mut sched, StageId::Design);
+
+        let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
+        assert!(!ready.contains(&StageId::Architect));
+        assert!(!ready.contains(&StageId::Implement));
+        assert!(sched.is_awaiting_architecture_input());
+    }
+
+    #[test]
+    fn architect_finalize_enables_implement() {
+        let mut sched = DagScheduler::new();
+        for stage in [StageId::Ingest, StageId::Summarize, StageId::Design] {
+            complete_through(&mut sched, stage);
+        }
+        sched.record_architect_draft();
+        sched.record_architect_answers_submitted();
+        sched.record_architect_finalized();
+
+        let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
+        assert!(ready.contains(&StageId::Implement));
+    }
+
+    #[test]
+    fn implement_waits_for_both_architect_and_design() {
+        let mut sched = DagScheduler::new();
+        for stage in [StageId::Ingest, StageId::Summarize] {
+            complete_through(&mut sched, stage);
+        }
+        sched.record_architect_finalized();
 
         let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
         assert!(!ready.contains(&StageId::Implement));
@@ -294,15 +376,11 @@ mod tests {
     #[test]
     fn verify_runs_after_implement() {
         let mut sched = DagScheduler::with_quality(ProjectId::new(), MAX_DEBUG_CYCLES);
-        for stage in [
-            StageId::Ingest,
-            StageId::Summarize,
-            StageId::Architect,
-            StageId::Design,
-            StageId::Implement,
-        ] {
+        for stage in [StageId::Ingest, StageId::Summarize, StageId::Design] {
             complete_through(&mut sched, stage);
         }
+        sched.record_architect_finalized();
+        complete_through(&mut sched, StageId::Implement);
 
         let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
         assert!(ready.contains(&StageId::Verify));
@@ -311,15 +389,11 @@ mod tests {
     #[test]
     fn verify_fail_triggers_debug_then_reverify() {
         let mut sched = DagScheduler::with_quality(ProjectId::new(), 3);
-        for stage in [
-            StageId::Ingest,
-            StageId::Summarize,
-            StageId::Architect,
-            StageId::Design,
-            StageId::Implement,
-        ] {
+        for stage in [StageId::Ingest, StageId::Summarize, StageId::Design] {
             complete_through(&mut sched, stage);
         }
+        sched.record_architect_finalized();
+        complete_through(&mut sched, StageId::Implement);
 
         sched.record_verify_result(false);
         let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
@@ -334,15 +408,11 @@ mod tests {
     #[test]
     fn verify_pass_enables_security_patch() {
         let mut sched = DagScheduler::with_quality(ProjectId::new(), 3);
-        for stage in [
-            StageId::Ingest,
-            StageId::Summarize,
-            StageId::Architect,
-            StageId::Design,
-            StageId::Implement,
-        ] {
+        for stage in [StageId::Ingest, StageId::Summarize, StageId::Design] {
             complete_through(&mut sched, stage);
         }
+        sched.record_architect_finalized();
+        complete_through(&mut sched, StageId::Implement);
 
         sched.record_verify_result(true);
         let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
@@ -353,15 +423,11 @@ mod tests {
     #[test]
     fn security_patch_then_deliver() {
         let mut sched = DagScheduler::with_quality(ProjectId::new(), 3);
-        for stage in [
-            StageId::Ingest,
-            StageId::Summarize,
-            StageId::Architect,
-            StageId::Design,
-            StageId::Implement,
-        ] {
+        for stage in [StageId::Ingest, StageId::Summarize, StageId::Design] {
             complete_through(&mut sched, stage);
         }
+        sched.record_architect_finalized();
+        complete_through(&mut sched, StageId::Implement);
         sched.record_verify_result(true);
         sched.record_security_done();
 

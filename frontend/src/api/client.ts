@@ -4,6 +4,8 @@ import type {
   DailyLogSummary,
   HealthResponse,
   HostedImage,
+  LanguageMode,
+  ProgrammingLanguage,
   Project,
   ProjectDetail,
   UploadImageResponse,
@@ -34,6 +36,8 @@ export interface CreateProjectOptions {
   repoUrl?: string;
   devopsPlanText?: string;
   devopsPlanFile?: File | null;
+  programmingLanguage?: ProgrammingLanguage;
+  languageMode?: LanguageMode;
 }
 
 export async function getHealth(): Promise<HealthResponse> {
@@ -61,6 +65,12 @@ export async function createProject(
   }
   if (options.devopsPlanFile) {
     form.append('devops_plan', options.devopsPlanFile);
+  }
+  if (options.languageMode) {
+    form.append('language_mode', options.languageMode);
+  }
+  if (options.programmingLanguage) {
+    form.append('programming_language', options.programmingLanguage);
   }
 
   const res = await fetch(`${API_BASE}/v1/projects`, {
@@ -93,6 +103,33 @@ export async function listDailyLogs(
 export async function cancelProject(id: string): Promise<void> {
   await request(`/v1/projects/${id}/cancel`, { method: 'POST' });
 }
+
+export async function submitArchitectureAnswers(
+  projectId: string,
+  answers: { id: string; answer: string }[],
+): Promise<void> {
+  await request(`/v1/projects/${projectId}/architecture-answers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answers }),
+  });
+}
+
+export const PROGRAMMING_LANGUAGES: {
+  value: ProgrammingLanguage;
+  label: string;
+}[] = [
+  { value: 'rust', label: 'Rust' },
+  { value: 'typescript', label: 'TypeScript' },
+  { value: 'python', label: 'Python' },
+  { value: 'go', label: 'Go' },
+  { value: 'java', label: 'Java' },
+  { value: 'kotlin', label: 'Kotlin' },
+  { value: 'swift', label: 'Swift' },
+  { value: 'csharp', label: 'C#' },
+  { value: 'ruby', label: 'Ruby' },
+  { value: 'php', label: 'PHP' },
+];
 
 export async function uploadImage(file: File): Promise<UploadImageResponse> {
   const form = new FormData();

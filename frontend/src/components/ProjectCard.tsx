@@ -5,6 +5,7 @@ import type { Project } from '../types';
 const stateLabel: Record<string, string> = {
   pending: '대기',
   running: '실행 중',
+  awaiting_input: '입력 대기',
   completed: '완료',
   failed: '실패',
   cancelled: '취소됨',
@@ -12,6 +13,7 @@ const stateLabel: Record<string, string> = {
 
 const stateBadgeClass: Record<string, string> = {
   running: 'text-accent border-accent/40',
+  awaiting_input: 'text-warn border-warn/40',
   completed: 'text-success border-success/40',
   failed: 'text-error border-error/40',
 };

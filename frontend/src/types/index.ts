@@ -1,4 +1,34 @@
-export type PipelineState = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type PipelineState =
+  | 'pending'
+  | 'running'
+  | 'awaiting_input'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type LanguageMode = 'auto' | 'manual';
+
+export type ProgrammingLanguage =
+  | 'rust'
+  | 'typescript'
+  | 'python'
+  | 'go'
+  | 'java'
+  | 'kotlin'
+  | 'swift'
+  | 'csharp'
+  | 'ruby'
+  | 'php';
+
+export interface ArchitectureClarification {
+  id: string;
+  question: string;
+  options: string[];
+  required: boolean;
+  category?: string | null;
+  answer?: string | null;
+  answered_at?: string | null;
+}
 
 export type StageId =
   | 'ingest'
@@ -29,6 +59,11 @@ export interface Project {
   merge_status: string | null;
   github_repo: string | null;
   has_devops_plan: boolean;
+  programming_language: string | null;
+  resolved_language: string | null;
+  language_mode: LanguageMode;
+  awaiting_architecture_input: boolean;
+  architecture_clarifications: ArchitectureClarification[];
   created_at: string;
 }
 

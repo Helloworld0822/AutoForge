@@ -1,5 +1,6 @@
 import { Link, useParams } from 'react-router-dom';
 import { useProject } from '../hooks/useProject';
+import { ArchitectureQnAPanel } from '../components/ArchitectureQnAPanel';
 import { PipelineStages } from '../components/PipelineStages';
 import { DailyLogPanel } from '../components/DailyLogPanel';
 import { cancelProject } from '../api/client';
@@ -18,6 +19,7 @@ import { useState } from 'react';
 const stateLabel: Record<string, string> = {
   pending: '대기',
   running: '실행 중',
+  awaiting_input: '입력 대기',
   completed: '완료',
   failed: '실패',
   cancelled: '취소됨',
@@ -25,6 +27,7 @@ const stateLabel: Record<string, string> = {
 
 const stateBadgeClass: Record<string, string> = {
   running: 'text-accent border-accent/40',
+  awaiting_input: 'text-warn border-warn/40',
   completed: 'text-success border-success/40',
   failed: 'text-error border-error/40',
 };
@@ -96,6 +99,11 @@ export function ProjectDetailPage() {
                 <Server size={12} /> DevOps
               </span>
             )}
+            {(project.resolved_language || project.programming_language) && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-border bg-bg px-2.5 py-0.5 text-xs font-medium text-muted">
+                {(project.resolved_language ?? project.programming_language)?.toUpperCase()}
+              </span>
+            )}
             <span className="inline-block rounded-full border border-border bg-bg px-2.5 py-0.5 text-xs font-medium text-muted">
               {project.id.slice(0, 8)}
             </span>
@@ -127,6 +135,15 @@ export function ProjectDetailPage() {
           </div>
         </div>
       </section>
+
+      {project.awaiting_architecture_input &&
+        project.architecture_clarifications.length > 0 && (
+          <ArchitectureQnAPanel
+            projectId={project.id}
+            clarifications={project.architecture_clarifications}
+            onSubmitted={refresh}
+          />
+        )}
 
       <section className="mb-5 rounded-lg border border-border bg-card p-5 md:p-6">
         <h3 className="mb-4 text-base font-medium">파이프라인 스테이지</h3>

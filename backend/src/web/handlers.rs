@@ -1,17 +1,22 @@
 use crate::app::App;
 use crate::domain::{
-    DailyLogSummary, DevopsPlanInput, PipelineState, ProjectDetailView, ProjectView, StageState,
+    ArchitectureAnswerInput, DailyLogSummary, DevopsPlanInput, LanguageMode, PipelineState,
+    ProgrammingLanguage, ProjectDetailView, ProjectView, StageState,
 };
 use crate::error::{AutoForgeError, Result};
 use crate::services::artifacts::{
     detect_image_extension, guess_image_content_type, ArtifactStore, MEDIA_DIR,
 };
 use crate::services::github::ensure_project_repo;
-use crate::services::pipeline::{run_inline, start_project_mq};
+use crate::services::pipeline::engine::{
+    resume_project_pipeline, run_inline, submit_architecture_answers as apply_architecture_answers,
+};
+use crate::services::pipeline::start_project_mq;
 use actix_multipart::Multipart;
 use actix_web::http::header;
 use actix_web::{web, HttpResponse};
 use futures_util::{StreamExt, TryStreamExt};
+use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -79,6 +84,8 @@ pub async fn create_project(
 ) -> Result<HttpResponse> {
     let mut name: Option<String> = None;
     let mut repo_url: Option<String> = None;
+    let mut programming_language: Option<ProgrammingLanguage> = None;
+    let mut language_mode = LanguageMode::Auto;
     let mut pdf_bytes: Option<Vec<u8>> = None;
     let mut devops_plan = DevopsPlanInput::default();
     let max_upload = app.config.max_upload_bytes;
@@ -145,6 +152,29 @@ pub async fn create_project(
                 devops_plan.filename = field_filename;
                 devops_plan.content_type = field_content_type;
             }
+            "programming_language" | "language" => {
+                let value = String::from_utf8_lossy(&data).trim().to_lowercase();
+                if !value.is_empty() && value != "auto" {
+                    programming_language =
+                        ProgrammingLanguage::from_str_loose(&value).ok_or_else(|| {
+                            AutoForgeError::BadRequest(format!(
+                                "unsupported programming_language: {value}"
+                            ))
+                        })?;
+                }
+            }
+            "language_mode" => {
+                let value = String::from_utf8_lossy(&data).trim().to_lowercase();
+                language_mode = match value.as_str() {
+                    "auto" | "" => LanguageMode::Auto,
+                    "manual" | "specified" => LanguageMode::Manual,
+                    other => {
+                        return Err(AutoForgeError::BadRequest(format!(
+                            "invalid language_mode: {other} (use auto or manual)"
+                        )));
+                    }
+                };
+            }
             "plan" | "pdf" | "file" => pdf_bytes = Some(data),
             _ => {}
         }
@@ -161,7 +191,15 @@ pub async fn create_project(
         return Err(AutoForgeError::BadRequest("invalid PDF file".into()));
     }
 
-    let mut project = app.create_project(name, repo_url).await;
+    if language_mode == LanguageMode::Manual && programming_language.is_none() {
+        return Err(AutoForgeError::BadRequest(
+            "programming_language is required when language_mode is manual".into(),
+        ));
+    }
+
+    let mut project = app
+        .create_project(name, repo_url, programming_language, language_mode)
+        .await;
     project.pdf_bytes = Some(pdf);
     if devops_plan.has_content() {
         project.devops_plan = Some(devops_plan);
@@ -208,6 +246,41 @@ pub async fn create_project(
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         "has_devops_plan": project.devops_plan.as_ref().is_some_and(|d| d.has_content()),
+        "programming_language": project.programming_language.map(|l| l.as_str()),
+        "language_mode": project.language_mode,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubmitArchitectureAnswersRequest {
+    pub answers: Vec<ArchitectureAnswerInput>,
+}
+
+/// 아키텍처 설계 단계 질문에 대한 답변 제출 및 파이프라인 재개
+pub async fn submit_architecture_answers(
+    app: web::Data<Arc<App>>,
+    path: web::Path<Uuid>,
+    body: web::Json<SubmitArchitectureAnswersRequest>,
+) -> Result<HttpResponse> {
+    let id = path.into_inner();
+    let mut project = app
+        .get_project(id)
+        .await
+        .ok_or_else(|| AutoForgeError::NotFound(format!("project {id}")))?;
+
+    apply_architecture_answers(&app, &mut project, body.answers.clone()).await?;
+    app.store.save(&project).await?;
+    resume_project_pipeline(app.get_ref().clone(), id).await?;
+
+    let project = app.get_project(id).await.ok_or_else(|| {
+        AutoForgeError::Internal("project lost after architecture answers".into())
+    })?;
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "id": id,
+        "state": project.state,
+        "message": "architecture answers submitted, pipeline resumed",
+        "architecture_clarifications": project.architecture_clarifications,
     })))
 }
 

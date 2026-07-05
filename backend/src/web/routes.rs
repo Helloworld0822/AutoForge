@@ -18,6 +18,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route("/projects", web::get().to(handlers::list_projects))
                 .route("/projects/{id}", web::get().to(handlers::get_project))
                 .route(
+                    "/projects/{id}/architecture-answers",
+                    web::post().to(handlers::submit_architecture_answers),
+                )
+                .route(
                     "/projects/{id}/stream",
                     web::get().to(handlers::stream_project),
                 )

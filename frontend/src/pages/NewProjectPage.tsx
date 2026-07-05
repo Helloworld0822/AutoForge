@@ -1,8 +1,10 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { createProject } from '../api/client';
+import { createProject, PROGRAMMING_LANGUAGES } from '../api/client';
+import type { LanguageMode, ProgrammingLanguage } from '../types';
 import {
   CloudCog,
+  Code2,
   FileText,
   FolderGit2,
   Loader2,
@@ -40,6 +42,9 @@ export function NewProjectPage() {
   const [file, setFile] = useState<File | null>(null);
   const [devopsFile, setDevopsFile] = useState<File | null>(null);
   const [devopsText, setDevopsText] = useState('');
+  const [languageMode, setLanguageMode] = useState<LanguageMode>('auto');
+  const [programmingLanguage, setProgrammingLanguage] =
+    useState<ProgrammingLanguage>('typescript');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -68,6 +73,9 @@ export function NewProjectPage() {
         repoUrl: repoUrl || undefined,
         devopsPlanText: devopsText || undefined,
         devopsPlanFile: devopsFile,
+        languageMode,
+        programmingLanguage:
+          languageMode === 'manual' ? programmingLanguage : undefined,
       });
       navigate(`/projects/${res.id}`);
     } catch (err) {
@@ -206,6 +214,57 @@ export function NewProjectPage() {
             className="mt-1.5 block w-full rounded-lg border border-border bg-bg px-3.5 py-2.5 text-foreground"
           />
         </label>
+
+        <div className="mb-4">
+          <h3 className="mb-3 flex items-center gap-2 text-[0.95rem] font-medium text-foreground">
+            <Code2 size={18} />
+            구현 언어
+          </h3>
+          <div className="mb-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
+                languageMode === 'auto'
+                  ? 'border-accent bg-accent-dim text-foreground'
+                  : 'border-border bg-bg text-muted hover:border-accent'
+              }`}
+              onClick={() => setLanguageMode('auto')}
+            >
+              자동 선택 (AI가 계획서 분석)
+            </button>
+            <button
+              type="button"
+              className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
+                languageMode === 'manual'
+                  ? 'border-accent bg-accent-dim text-foreground'
+                  : 'border-border bg-bg text-muted hover:border-accent'
+              }`}
+              onClick={() => setLanguageMode('manual')}
+            >
+              직접 지정
+            </button>
+          </div>
+          {languageMode === 'manual' && (
+            <select
+              value={programmingLanguage}
+              onChange={(e) =>
+                setProgrammingLanguage(e.target.value as ProgrammingLanguage)
+              }
+              className="block w-full rounded-lg border border-border bg-bg px-3.5 py-2.5 text-foreground"
+            >
+              {PROGRAMMING_LANGUAGES.map((lang) => (
+                <option key={lang.value} value={lang.value}>
+                  {lang.label}
+                </option>
+              ))}
+            </select>
+          )}
+          {languageMode === 'auto' && (
+            <p className="text-xs text-muted">
+              Summarize 단계에서 계획서를 분석해 최적의 언어를 자동으로 결정합니다.
+            </p>
+          )}
+        </div>
 
         <label className="mb-4 block text-sm text-muted">
           <span className="inline-flex items-center gap-1.5">

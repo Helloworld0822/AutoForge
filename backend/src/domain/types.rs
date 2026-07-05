@@ -125,9 +125,130 @@ impl ModelProfile {
 pub enum PipelineState {
     Pending,
     Running,
+    /// 아키텍처 설계 질문에 대한 사용자 입력 대기
+    AwaitingInput,
     Completed,
     Failed,
     Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgrammingLanguage {
+    Rust,
+    TypeScript,
+    Python,
+    Go,
+    Java,
+    Kotlin,
+    Swift,
+    CSharp,
+    Ruby,
+    Php,
+}
+
+impl ProgrammingLanguage {
+    pub fn all() -> &'static [ProgrammingLanguage] {
+        &[
+            ProgrammingLanguage::Rust,
+            ProgrammingLanguage::TypeScript,
+            ProgrammingLanguage::Python,
+            ProgrammingLanguage::Go,
+            ProgrammingLanguage::Java,
+            ProgrammingLanguage::Kotlin,
+            ProgrammingLanguage::Swift,
+            ProgrammingLanguage::CSharp,
+            ProgrammingLanguage::Ruby,
+            ProgrammingLanguage::Php,
+        ]
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProgrammingLanguage::Rust => "rust",
+            ProgrammingLanguage::TypeScript => "typescript",
+            ProgrammingLanguage::Python => "python",
+            ProgrammingLanguage::Go => "go",
+            ProgrammingLanguage::Java => "java",
+            ProgrammingLanguage::Kotlin => "kotlin",
+            ProgrammingLanguage::Swift => "swift",
+            ProgrammingLanguage::CSharp => "csharp",
+            ProgrammingLanguage::Ruby => "ruby",
+            ProgrammingLanguage::Php => "php",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            ProgrammingLanguage::Rust => "Rust",
+            ProgrammingLanguage::TypeScript => "TypeScript",
+            ProgrammingLanguage::Python => "Python",
+            ProgrammingLanguage::Go => "Go",
+            ProgrammingLanguage::Java => "Java",
+            ProgrammingLanguage::Kotlin => "Kotlin",
+            ProgrammingLanguage::Swift => "Swift",
+            ProgrammingLanguage::CSharp => "C#",
+            ProgrammingLanguage::Ruby => "Ruby",
+            ProgrammingLanguage::Php => "PHP",
+        }
+    }
+
+    pub fn from_str_loose(s: &str) -> Option<Self> {
+        match s
+            .trim()
+            .to_ascii_lowercase()
+            .replace(['-', ' '], "")
+            .as_str()
+        {
+            "rust" => Some(ProgrammingLanguage::Rust),
+            "typescript" | "ts" | "javascript" | "js" | "nodejs" | "node" => {
+                Some(ProgrammingLanguage::TypeScript)
+            }
+            "python" | "py" => Some(ProgrammingLanguage::Python),
+            "go" | "golang" => Some(ProgrammingLanguage::Go),
+            "java" => Some(ProgrammingLanguage::Java),
+            "kotlin" | "kt" => Some(ProgrammingLanguage::Kotlin),
+            "swift" => Some(ProgrammingLanguage::Swift),
+            "csharp" | "c#" | "dotnet" | "cs" => Some(ProgrammingLanguage::CSharp),
+            "ruby" | "rb" => Some(ProgrammingLanguage::Ruby),
+            "php" => Some(ProgrammingLanguage::Php),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LanguageMode {
+    #[default]
+    Auto,
+    Manual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchitectureClarification {
+    pub id: String,
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default = "default_true")]
+    pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<DateTime<Utc>>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchitectureAnswerInput {
+    pub id: String,
+    pub answer: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -272,6 +393,18 @@ pub struct Project {
     /// DevOps 계획서 (CI/CD, 인프라, 배포 파이프라인 등)
     #[serde(default)]
     pub devops_plan: Option<DevopsPlanInput>,
+    /// 사용자가 지정한 구현 언어 (language_mode=manual일 때)
+    #[serde(default)]
+    pub programming_language: Option<ProgrammingLanguage>,
+    /// 자동 선택 vs 사용자 지정
+    #[serde(default)]
+    pub language_mode: LanguageMode,
+    /// summarize 이후 확정된 구현 언어
+    #[serde(default)]
+    pub resolved_language: Option<ProgrammingLanguage>,
+    /// 아키텍처 설계 단계 질의응답
+    #[serde(default)]
+    pub architecture_clarifications: Vec<ArchitectureClarification>,
     /// 스테이지별 메타데이터 (pr_url, verify_report 등)
     pub stage_outputs: HashMap<StageId, serde_json::Value>,
     /// 누적 산출물 참조
@@ -318,6 +451,11 @@ pub struct ProjectView {
     pub github_repo: Option<String>,
     pub has_devops_plan: bool,
     pub daily_log_count: usize,
+    pub programming_language: Option<String>,
+    pub resolved_language: Option<String>,
+    pub language_mode: LanguageMode,
+    pub awaiting_architecture_input: bool,
+    pub architecture_clarifications: Vec<ArchitectureClarification>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -368,6 +506,11 @@ impl From<&Project> for ProjectView {
             github_repo,
             has_devops_plan: p.devops_plan.as_ref().is_some_and(|d| d.has_content()),
             daily_log_count: p.daily_logs.len(),
+            programming_language: p.programming_language.map(|l| l.as_str().to_string()),
+            resolved_language: p.resolved_language.map(|l| l.as_str().to_string()),
+            language_mode: p.language_mode,
+            awaiting_architecture_input: p.state == PipelineState::AwaitingInput,
+            architecture_clarifications: p.architecture_clarifications.clone(),
             created_at: p.created_at,
         }
     }

@@ -366,6 +366,18 @@ async fn handle_event(app: &App, event: &PipelineEvent) -> Result<()> {
                     )
                     .await;
                 }
+                PipelineOutcome::AwaitingInput => {
+                    let _ = record_daily_event(
+                        app,
+                        &mut project,
+                        DailyEvent {
+                            event: "architecture_input_required",
+                            stage: Some(*stage),
+                            message: "아키텍처 설계 질문에 대한 답변 필요".into(),
+                        },
+                    )
+                    .await;
+                }
                 PipelineOutcome::Continue => {
                     if project.state == PipelineState::Cancelled {
                         info!(%project_id, "project cancelled, not enqueueing further stages");
