@@ -9,6 +9,8 @@ const STITCH_MCP_BASE: &str = "https://stitch.googleapis.com/mcp";
 pub struct StitchClient {
     http: Client,
     api_key: String,
+    access_token: String,
+    google_cloud_project: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,7 +44,11 @@ pub struct StitchAsset {
 }
 
 impl StitchClient {
-    pub fn new(api_key: impl Into<String>) -> Result<Self> {
+    pub fn new(
+        api_key: impl Into<String>,
+        access_token: impl Into<String>,
+        google_cloud_project: Option<String>,
+    ) -> Result<Self> {
         let http = Client::builder()
             .timeout(Duration::from_secs(300))
             .build()
@@ -51,20 +57,59 @@ impl StitchClient {
         Ok(Self {
             http,
             api_key: api_key.into(),
+            access_token: access_token.into(),
+            google_cloud_project,
         })
     }
 
+    fn has_credentials(&self) -> bool {
+        !self.api_key.is_empty() || !self.access_token.is_empty()
+    }
+
+    /// Stitch MCP 인증: API 키(X-Goog-Api-Key) + 생성용 OAuth Bearer.
+    /// generate_screen_from_text 등 AI 생성 도구는 Bearer 토큰이 필요하다.
     fn auth_headers(&self) -> Vec<(&'static str, String)> {
-        if self.api_key.is_empty() {
-            return vec![];
+        let mut headers = Vec::new();
+        if !self.api_key.is_empty() {
+            headers.push(("X-Goog-Api-Key", self.api_key.clone()));
         }
-        vec![("X-Goog-Api-Key", self.api_key.clone())]
+        if !self.access_token.is_empty() {
+            headers.push(("Authorization", format!("Bearer {}", self.access_token)));
+        }
+        if let Some(project) = &self.google_cloud_project {
+            headers.push(("X-Goog-User-Project", project.clone()));
+        }
+        headers
+    }
+
+    fn needs_access_token(&self, method: &str, tool_name: Option<&str>) -> bool {
+        method == "tools/call"
+            && tool_name.is_some_and(|name| {
+                matches!(
+                    name,
+                    "generate_screen_from_text" | "edit_screens" | "generate_variants"
+                )
+            })
     }
 
     async fn post_mcp(&self, body: &McpRequest) -> Result<serde_json::Value> {
-        if self.api_key.is_empty() {
+        if !self.has_credentials() {
             return Err(AutoForgeError::StitchApi(
-                "STITCH_API_KEY is not configured".into(),
+                "STITCH_API_KEY or STITCH_ACCESS_TOKEN is not configured".into(),
+            ));
+        }
+
+        let tool_name = body
+            .params
+            .get("name")
+            .and_then(|v| v.as_str());
+        if self.needs_access_token(body.method, tool_name) && self.access_token.is_empty() {
+            return Err(AutoForgeError::StitchApi(
+                "STITCH_ACCESS_TOKEN is required for Stitch screen generation — \
+                 API key alone is insufficient. Run: \
+                 gcloud auth application-default login && \
+                 gcloud auth application-default print-access-token"
+                    .into(),
             ));
         }
 
@@ -110,8 +155,8 @@ impl StitchClient {
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
-            let message = extract_text_content(&result)
-                .unwrap_or_else(|| "unknown Stitch tool error".into());
+            let message =
+                extract_text_content(&result).unwrap_or_else(|| "unknown Stitch tool error".into());
             return Err(AutoForgeError::StitchApi(message));
         }
 
@@ -137,20 +182,13 @@ impl StitchClient {
     }
 
     /// Stitch 프로젝트가 없으면 생성하고 ID를 반환한다.
-    pub async fn ensure_project(
-        &self,
-        title: &str,
-        existing_id: Option<&str>,
-    ) -> Result<String> {
+    pub async fn ensure_project(&self, title: &str, existing_id: Option<&str>) -> Result<String> {
         if let Some(id) = existing_id.filter(|id| !id.is_empty()) {
             return Ok(id.to_string());
         }
 
         let result = self
-            .call_tool(
-                "create_project",
-                serde_json::json!({ "title": title }),
-            )
+            .call_tool("create_project", serde_json::json!({ "title": title }))
             .await?;
 
         extract_project_id(&result)
@@ -176,11 +214,7 @@ impl StitchClient {
         extract_screen(&result)
     }
 
-    pub async fn get_screen_html(
-        &self,
-        project_id: &str,
-        screen_id: &str,
-    ) -> Result<StitchAsset> {
+    pub async fn get_screen_html(&self, project_id: &str, screen_id: &str) -> Result<StitchAsset> {
         let name = format!("projects/{project_id}/screens/{screen_id}");
         let result = self
             .call_tool(
@@ -200,10 +234,10 @@ impl StitchClient {
         Ok(StitchAsset { download_url })
     }
 
-    /// Stitch MCP 엔드포인트 연결 확인
+    /// Stitch MCP 엔드포인트 연결 확인 (tools/list + 생성 인증 여부)
     pub async fn health_check(&self) -> std::result::Result<(), String> {
-        if self.api_key.is_empty() {
-            return Err("STITCH_API_KEY not configured".into());
+        if !self.has_credentials() {
+            return Err("STITCH_API_KEY or STITCH_ACCESS_TOKEN not configured".into());
         }
 
         let body = McpRequest {
@@ -213,9 +247,14 @@ impl StitchClient {
             params: serde_json::json!({}),
         };
 
-        self.post_mcp(&body)
-            .await
-            .map_err(|e| e.to_string())?;
+        self.post_mcp(&body).await.map_err(|e| e.to_string())?;
+
+        if self.access_token.is_empty() {
+            return Err(
+                "tools/list OK but STITCH_ACCESS_TOKEN missing — Design stage will fail on generate_screen"
+                    .into(),
+            );
+        }
 
         Ok(())
     }
@@ -391,10 +430,7 @@ mod tests {
                 "text": "{\"name\":\"projects/4044680601076201931\"}"
             }]
         });
-        assert_eq!(
-            extract_project_id(&value).unwrap(),
-            "4044680601076201931"
-        );
+        assert_eq!(extract_project_id(&value).unwrap(), "4044680601076201931");
     }
 
     #[test]
@@ -406,10 +442,7 @@ mod tests {
         });
         let screen = extract_screen(&value).unwrap();
         assert_eq!(screen.id, "abc456");
-        assert_eq!(
-            screen.name.as_deref(),
-            Some("projects/123/screens/abc456")
-        );
+        assert_eq!(screen.name.as_deref(), Some("projects/123/screens/abc456"));
     }
 
     #[test]

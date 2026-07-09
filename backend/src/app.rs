@@ -32,7 +32,7 @@ impl App {
     pub async fn new(config: Config) -> crate::Result<Self> {
         let watch = Arc::new(ProjectWatch::memory());
         let inner: Arc<dyn ProjectStore> = Arc::new(MemoryStore::new());
-        let store = NotifyingStore::new(inner, watch.clone());
+        let store: Arc<dyn ProjectStore> = Arc::new(NotifyingStore::new(inner, watch.clone()));
         Self::build(config, store, watch, None, None).await
     }
 
@@ -41,7 +41,7 @@ impl App {
         let watch = Arc::new(ProjectWatch::redis(config.redis_url.clone()));
         let inner: Arc<dyn ProjectStore> =
             Arc::new(RedisProjectStore::connect(&config.redis_url).await?);
-        let store = NotifyingStore::new(inner, watch.clone());
+        let store: Arc<dyn ProjectStore> = Arc::new(NotifyingStore::new(inner, watch.clone()));
         let queue = Some(MessageQueue::connect(&config).await?);
         let slack = if config.slack_enabled() {
             Some(Arc::new(SlackNotifier::new(&config)?))
@@ -63,6 +63,8 @@ impl App {
         )?);
         let stitch = Arc::new(crate::clients::stitch::StitchClient::new(
             config.stitch_api_key.clone(),
+            config.stitch_access_token.clone(),
+            config.google_cloud_project.clone(),
         )?);
         let media = Arc::new(LocalArtifactStore::new(
             &config.artifacts_dir,

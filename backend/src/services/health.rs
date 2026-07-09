@@ -69,7 +69,7 @@ fn skipped(message: impl Into<String>) -> CheckResult {
     }
 }
 
-/// 외부 의존성(Redis, Cursor, Stitch) 및 스토어 프로브 — readiness 용
+/// 외부 의존성(RabbitMQ, Redis store, Cursor, Stitch) 및 스토어 프로브 — readiness 용
 pub async fn readiness(app: &App) -> HealthReport {
     let mut checks = BTreeMap::new();
     let mut unhealthy = false;
@@ -107,7 +107,7 @@ pub async fn readiness(app: &App) -> HealthReport {
 
     if let Some(mq) = &app.queue {
         let mq = mq.clone();
-        let (k, v) = timed_check("redis", || {
+        let (k, v) = timed_check("rabbitmq", || {
             let mq = mq.clone();
             async move { mq.ping().await.map_err(|e| e.to_string()) }
         })
@@ -118,7 +118,7 @@ pub async fn readiness(app: &App) -> HealthReport {
         checks.insert(k, v);
     } else if app.config.message_queue_enabled() {
         let (k, v) = (
-            "redis".to_string(),
+            "rabbitmq".to_string(),
             CheckResult {
                 status: "error",
                 message: Some("message queue enabled but not connected".into()),
@@ -127,6 +127,19 @@ pub async fn readiness(app: &App) -> HealthReport {
         );
         unhealthy = true;
         checks.insert(k, v);
+    } else {
+        checks.insert("rabbitmq".into(), skipped("inline mode"));
+    }
+
+    if app.config.message_queue_enabled() {
+        checks.insert(
+            "redis".into(),
+            CheckResult {
+                status: "ok",
+                message: Some("project store backend".into()),
+                latency_ms: None,
+            },
+        );
     } else {
         checks.insert("redis".into(), skipped("inline mode"));
     }
@@ -138,31 +151,32 @@ pub async fn readiness(app: &App) -> HealthReport {
         );
     } else {
         let cursor = app.cursor.clone();
-        let (k, v) = timed_check("cursor_api", || {
+        let (k, mut v) = timed_check("cursor_api", || {
             let cursor = cursor.clone();
             async move { cursor.health_check().await }
         })
         .await;
         if v.status == "error" {
-            unhealthy = true;
+            // 외부 AI API는 일시적 네트워크 장애가 있어도 대시보드/API는 서빙 가능해야 한다.
+            v.status = "degraded";
         }
         checks.insert(k, v);
     }
 
-    if app.config.stitch_api_key.is_empty() {
+    if app.config.stitch_api_key.is_empty() && app.config.stitch_access_token.is_empty() {
         checks.insert(
             "stitch_api".into(),
-            skipped("STITCH_API_KEY not configured"),
+            skipped("STITCH_API_KEY / STITCH_ACCESS_TOKEN not configured"),
         );
     } else {
         let stitch = app.stitch.clone();
-        let (k, v) = timed_check("stitch_api", || {
+        let (k, mut v) = timed_check("stitch_api", || {
             let stitch = stitch.clone();
             async move { stitch.health_check().await }
         })
         .await;
         if v.status == "error" {
-            unhealthy = true;
+            v.status = "degraded";
         }
         checks.insert(k, v);
     }
