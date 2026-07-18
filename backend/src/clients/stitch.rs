@@ -99,10 +99,7 @@ impl StitchClient {
             ));
         }
 
-        let tool_name = body
-            .params
-            .get("name")
-            .and_then(|v| v.as_str());
+        let tool_name = body.params.get("name").and_then(|v| v.as_str());
         if self.needs_access_token(body.method, tool_name) && self.access_token.is_empty() {
             return Err(AutoForgeError::StitchApi(
                 "STITCH_ACCESS_TOKEN is required for Stitch screen generation — \

@@ -166,9 +166,7 @@ impl Config {
             tracing::warn!("CURSOR_API_KEY is not set — Summarize/Architect/Implement/Verify/Debug stages will fail");
         }
         if self.stitch_api_key.is_empty() && self.stitch_access_token.is_empty() {
-            tracing::warn!(
-                "STITCH_API_KEY / STITCH_ACCESS_TOKEN not set — Design stage will fail"
-            );
+            tracing::warn!("STITCH_API_KEY / STITCH_ACCESS_TOKEN not set — Design stage will fail");
         } else if !self.stitch_api_key.is_empty() && self.stitch_access_token.is_empty() {
             tracing::warn!(
                 "STITCH_ACCESS_TOKEN is not set — Stitch API key alone cannot run generate_screen; \
