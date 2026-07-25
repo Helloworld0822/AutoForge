@@ -158,13 +158,6 @@ curl -X POST http://localhost/v1/images \
 - [ ] 여러 호스트(노드)에 분산 배포하는 경우 `ARTIFACTS_DIR`를 NFS 등 네트워크 파일시스템으로 교체
 - [ ] CI(`.github/workflows/ci.yml`)가 통과하는지 확인 (fmt/clippy/test/build + compose smoke test)
 
-## Neovim MCU 개발 (Arduino / STM32)
-
-- **Arduino** — [yuukiflow/Arduino-Nvim](https://github.com/yuukiflow/Arduino-Nvim) (LSP, 보드/포트 관리, 라이브러리)
-- **STM32 / PlatformIO** — `autoforge-mcu` (빌드·플래시·시리얼)
-
-설치·명령어·lazy.nvim 설정은 [nvim/README.md](nvim/README.md)를 참고하세요.
-
 ## 상세 문서
 
 - [docs/STITCH_ACCESS_TOKEN.md](docs/STITCH_ACCESS_TOKEN.md) — Stitch Bearer 토큰 없을 때 동작
