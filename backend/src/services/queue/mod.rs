@@ -23,6 +23,8 @@ use uuid::Uuid;
 pub use messages::{PipelineEvent as Event, QueueCommand as Command};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const CONNECT_RETRY_DELAY: Duration = Duration::from_secs(2);
+const MAX_CONNECT_ATTEMPTS: u32 = 15;
 const EXCHANGE: &str = "autoforge";
 
 struct PendingAck {
@@ -43,6 +45,30 @@ pub struct MessageQueue {
 
 impl MessageQueue {
     pub async fn connect(config: &Config) -> Result<Arc<Self>> {
+        let mut last_err = None;
+        for attempt in 1..=MAX_CONNECT_ATTEMPTS {
+            match Self::try_connect(config).await {
+                Ok(mq) => return Ok(mq),
+                Err(err) => {
+                    if attempt < MAX_CONNECT_ATTEMPTS {
+                        tracing::warn!(
+                            attempt,
+                            max = MAX_CONNECT_ATTEMPTS,
+                            error = %err,
+                            "rabbitmq connect failed; retrying in {CONNECT_RETRY_DELAY:?}"
+                        );
+                        tokio::time::sleep(CONNECT_RETRY_DELAY).await;
+                    }
+                    last_err = Some(err);
+                }
+            }
+        }
+
+        Err(last_err
+            .unwrap_or_else(|| AutoForgeError::Queue("failed to connect to RabbitMQ".into())))
+    }
+
+    async fn try_connect(config: &Config) -> Result<Arc<Self>> {
         let connection = tokio::time::timeout(
             CONNECT_TIMEOUT,
             Connection::connect(&config.rabbitmq_url, ConnectionProperties::default()),
