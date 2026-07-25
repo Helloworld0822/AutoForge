@@ -74,7 +74,7 @@ fn token_expiry(token: &str) -> Option<SystemTime> {
     let payload_b64 = token.split('.').nth(1)?;
     let mut padded = payload_b64.to_string();
     let pad = (4 - padded.len() % 4) % 4;
-    padded.extend(std::iter::repeat_n('=', pad));
+    padded.extend(std::iter::repeat('=').take(pad));
     let bytes = base64_decode_url(&padded)?;
     let claims: JwtClaims = serde_json::from_slice(&bytes).ok()?;
     let exp = claims.exp?;
