@@ -20,6 +20,7 @@ pub struct App {
     pub media: Arc<LocalArtifactStore>,
     pub cursor: Arc<crate::clients::cursor::CursorClient>,
     pub stitch: Arc<crate::clients::stitch::StitchClient>,
+    pub figma: Arc<crate::clients::figma::FigmaClient>,
     pub queue: Option<Arc<MessageQueue>>,
     pub slack: Option<Arc<SlackNotifier>>,
     pub github: Option<Arc<GitHubClient>>,
@@ -66,6 +67,9 @@ impl App {
             config.stitch_access_token.clone(),
             config.google_cloud_project.clone(),
         )?);
+        let figma = Arc::new(crate::clients::figma::FigmaClient::new(
+            config.figma_access_token.clone(),
+        )?);
         let media = Arc::new(LocalArtifactStore::new(
             &config.artifacts_dir,
             &config.public_url,
@@ -109,6 +113,7 @@ impl App {
             media,
             cursor,
             stitch,
+            figma,
             queue,
             slack,
             github,

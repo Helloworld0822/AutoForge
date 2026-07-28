@@ -24,6 +24,8 @@ pub struct Config {
     pub stitch_api_key: String,
     /// Stitch AI 생성(generate_screen 등)용 OAuth Bearer 토큰. API 키만으로는 생성 불가.
     pub stitch_access_token: String,
+    /// Figma REST API Personal Access Token — Design 단계(figma 소스)용
+    pub figma_access_token: String,
     /// Bearer 인증 시 GCP 과금/quota 프로젝트 (X-Goog-User-Project)
     pub google_cloud_project: Option<String>,
     /// 파이프라인 산출물 및 이미지 호스팅 파일을 저장할 로컬 디렉터리
@@ -76,6 +78,7 @@ impl Config {
             cursor_api_key: env::var("CURSOR_API_KEY").unwrap_or_default(),
             stitch_api_key: env::var("STITCH_API_KEY").unwrap_or_default(),
             stitch_access_token: env::var("STITCH_ACCESS_TOKEN").unwrap_or_default(),
+            figma_access_token: env::var("FIGMA_ACCESS_TOKEN").unwrap_or_default(),
             google_cloud_project: optional_non_empty(
                 env::var("GOOGLE_CLOUD_PROJECT")
                     .or_else(|_| env::var("GCLOUD_PROJECT"))
@@ -188,6 +191,11 @@ impl Config {
             tracing::warn!(
                 "GOOGLE_CLOUD_PROJECT is not set — Stitch generate_screen may fail; \
                  set it to your GCP project ID (e.g. gcloud config set project YOUR_PROJECT)"
+            );
+        }
+        if self.figma_access_token.is_empty() {
+            tracing::warn!(
+                "FIGMA_ACCESS_TOKEN is not set — Design stage with design_source=figma will fail"
             );
         }
         if !self.auth_enabled() {

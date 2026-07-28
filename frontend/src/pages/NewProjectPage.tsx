@@ -317,7 +317,8 @@ export function NewProjectPage() {
               인프라/CI/CD 설계
             </li>
             <li>
-              <strong className="text-foreground">Design</strong> — Stitch로 UI 디자인
+              <strong className="text-foreground">Design</strong> — Stitch AI 생성 또는 Figma
+              디자인 파일
             </li>
             <li>
               <strong className="text-foreground">Implement</strong> — Codex 5.3이 코드 + DevOps

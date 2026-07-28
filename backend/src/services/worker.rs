@@ -1,4 +1,5 @@
 use crate::clients::cursor::{CreateAgentOpts, CursorClient};
+use crate::clients::figma::FigmaClient;
 use crate::clients::stitch::StitchClient;
 use crate::domain::{
     ArtifactRef, LanguageMode, PipelineModelConfig, ProgrammingLanguage, StageCommand, StageId,
@@ -21,6 +22,7 @@ pub struct StageContext {
     pub artifacts: Arc<dyn ArtifactStore>,
     pub cursor: Arc<CursorClient>,
     pub stitch: Arc<StitchClient>,
+    pub figma: Arc<FigmaClient>,
     pub input: Vec<ArtifactRef>,
     pub repo_url: Option<String>,
     pub stage_outputs: HashMap<StageId, serde_json::Value>,
@@ -267,46 +269,132 @@ impl StageExecutor for DesignExecutor {
     }
 
     async fn execute(&self, ctx: &StageContext) -> Result<StageOutput> {
-        let prompt = build_design_prompt(&ctx.input);
-        let device_type = ctx.model_config.design_device_type();
+        if ctx.model_config.uses_figma_design() {
+            return execute_figma_design(ctx).await;
+        }
+        execute_stitch_design(ctx).await
+    }
+}
 
-        let existing_stitch_project = ctx
-            .stage_outputs
-            .get(&StageId::Design)
-            .and_then(|v| v.get("stitch_project_id"))
-            .and_then(|v| v.as_str());
+async fn execute_stitch_design(ctx: &StageContext) -> Result<StageOutput> {
+    let prompt = build_design_prompt(&ctx.input);
+    let device_type = ctx.model_config.design_device_type();
 
-        let project_title = format!("AutoForge {}", ctx.command.project_id.0);
-        let stitch_project_id = ctx
-            .stitch
-            .ensure_project(&project_title, existing_stitch_project)
+    let existing_stitch_project = ctx
+        .stage_outputs
+        .get(&StageId::Design)
+        .and_then(|v| v.get("stitch_project_id"))
+        .and_then(|v| v.as_str());
+
+    let project_title = format!("AutoForge {}", ctx.command.project_id.0);
+    let stitch_project_id = ctx
+        .stitch
+        .ensure_project(&project_title, existing_stitch_project)
+        .await?;
+
+    let screen = ctx
+        .stitch
+        .generate_screen(&stitch_project_id, &prompt, device_type)
+        .await?;
+    let html = ctx
+        .stitch
+        .get_screen_html(&stitch_project_id, &screen.id)
+        .await?;
+
+    let artifact = ArtifactRef {
+        name: format!("screens/{}.html", screen.id),
+        key: html.download_url.clone(),
+        uri: html.download_url,
+        content_type: "text/html".into(),
+        sha256: None,
+    };
+
+    Ok(StageOutput {
+        artifacts: vec![artifact],
+        metadata: serde_json::json!({
+            "screen_id": screen.id,
+            "screen_name": screen.name,
+            "stitch_project_id": stitch_project_id,
+            "design_source": "stitch",
+        }),
+    })
+}
+
+async fn execute_figma_design(ctx: &StageContext) -> Result<StageOutput> {
+    let figma_url = ctx
+        .model_config
+        .figma_file_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| {
+            AutoForgeError::BadRequest(
+                "figma_file_url is required when design_source is figma".into(),
+            )
+        })?;
+
+    let export = ctx.figma.export_design(figma_url).await?;
+    let base = format!("projects/{}/design", ctx.command.project_id.0);
+    let mut artifacts = Vec::new();
+
+    let design_json = ctx
+        .artifacts
+        .put(
+            &format!("{base}/figma-design.json"),
+            Bytes::from(export.design_json.to_string()),
+            "application/json",
+        )
+        .await?;
+    artifacts.push(design_json);
+
+    let mut screen_meta = Vec::new();
+    for screen in export.screens {
+        let slug = slugify_filename(&screen.name);
+        let artifact = ctx
+            .artifacts
+            .put(
+                &format!("{base}/screens/{slug}.png"),
+                screen.image_bytes,
+                "image/png",
+            )
             .await?;
+        screen_meta.push(serde_json::json!({
+            "node_id": screen.node_id,
+            "name": screen.name,
+            "artifact": artifact.name,
+            "uri": artifact.uri,
+        }));
+        artifacts.push(artifact);
+    }
 
-        let screen = ctx
-            .stitch
-            .generate_screen(&stitch_project_id, &prompt, device_type)
-            .await?;
-        let html = ctx
-            .stitch
-            .get_screen_html(&stitch_project_id, &screen.id)
-            .await?;
+    Ok(StageOutput {
+        artifacts,
+        metadata: serde_json::json!({
+            "design_source": "figma",
+            "figma_file_key": export.file_key,
+            "figma_file_name": export.file_name,
+            "figma_file_url": export.figma_url,
+            "screens": screen_meta,
+        }),
+    })
+}
 
-        let artifact = ArtifactRef {
-            name: format!("screens/{}.html", screen.id),
-            key: html.download_url.clone(),
-            uri: html.download_url,
-            content_type: "text/html".into(),
-            sha256: None,
-        };
-
-        Ok(StageOutput {
-            artifacts: vec![artifact],
-            metadata: serde_json::json!({
-                "screen_id": screen.id,
-                "screen_name": screen.name,
-                "stitch_project_id": stitch_project_id,
-            }),
+fn slugify_filename(name: &str) -> String {
+    let slug: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
         })
+        .collect();
+    let trimmed = slug.trim_matches('-');
+    if trimmed.is_empty() {
+        "screen".into()
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -741,7 +829,8 @@ fn build_implement_prompt(ctx: &StageContext) -> String {
         ctx.resolved_language,
     );
     format!(
-        "tasks.json 순서대로 구현하세요. design/screens/ 의 Stitch HTML을 UI 참고로 사용하세요.\n\
+        "tasks.json 순서대로 구현하세요. design/screens/ 의 UI 참고 자료를 사용하세요. \
+         Stitch HTML 또는 Figma PNG/export JSON이 포함될 수 있습니다.\n\
          {lang_note}\
          {devops_note}\
          입력: {:?}",
