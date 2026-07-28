@@ -1,6 +1,8 @@
 import { Link, useParams } from 'react-router-dom';
 import { useProject } from '../hooks/useProject';
 import { ArchitectureQnAPanel } from '../components/ArchitectureQnAPanel';
+import { PipelineActivityPanel } from '../components/PipelineActivityPanel';
+import { PipelineRestartPanel } from '../components/PipelineRestartPanel';
 import { PipelineStages } from '../components/PipelineStages';
 import { DailyLogPanel } from '../components/DailyLogPanel';
 import { cancelProject } from '../api/client';
@@ -15,6 +17,7 @@ import {
   StopCircle,
 } from 'lucide-react';
 import { useState } from 'react';
+import type { StageId } from '../types';
 
 const stateLabel: Record<string, string> = {
   pending: '대기',
@@ -74,6 +77,9 @@ export function ProjectDetailPage() {
 
   const name = project.name || `Project ${project.id.slice(0, 8)}`;
   const outputs = project.stage_outputs ?? {};
+  const failedStage = project.stages.find((s) => s.status === 'failed')?.stage as
+    | StageId
+    | undefined;
 
   return (
     <div className="mx-auto max-w-[1100px]">
@@ -133,8 +139,27 @@ export function ProjectDetailPage() {
               style={{ width: `${project.progress_percent}%` }}
             />
           </div>
+          {project.state === 'running' && project.current_stage && (
+            <p className="mt-2 text-sm text-accent">
+              현재: {project.current_stage} 스테이지 실행 중
+            </p>
+          )}
         </div>
       </section>
+
+      {project.last_error && (
+        <div className="mb-5 rounded-lg border border-error/30 bg-error/10 px-4 py-3 text-sm text-error">
+          <strong className="block font-medium">실패 원인</strong>
+          {project.last_error}
+        </div>
+      )}
+
+      <PipelineActivityPanel
+        activity={project.recent_activity ?? []}
+        state={project.state}
+        currentStage={project.current_stage}
+        loading={loading}
+      />
 
       {project.awaiting_architecture_input &&
         project.architecture_clarifications.length > 0 && (
@@ -144,6 +169,16 @@ export function ProjectDetailPage() {
             onSubmitted={refresh}
           />
         )}
+
+      {(project.state === 'failed' || project.state === 'cancelled') && (
+        <PipelineRestartPanel
+          projectId={project.id}
+          failedStage={failedStage}
+          cancelled={project.state === 'cancelled'}
+          initialModelConfig={project.model_config}
+          onRestarted={refresh}
+        />
+      )}
 
       <section className="mb-5 rounded-lg border border-border bg-card p-5 md:p-6">
         <h3 className="mb-4 text-base font-medium">파이프라인 스테이지</h3>

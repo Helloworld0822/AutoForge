@@ -1,6 +1,7 @@
 mod auth;
 mod handlers;
 mod routes;
+mod ws;
 
 use crate::app::App;
 use crate::shutdown;
@@ -66,6 +67,13 @@ pub async fn serve(app: Arc<App>) -> std::io::Result<()> {
     let bind = app.config.bind_addr();
     let data = web::Data::new(app.clone());
     let session_secret = app.config.session_secret.clone();
+
+    if app.project_git.is_some() {
+        let push_app = app.clone();
+        tokio::spawn(async move {
+            crate::services::project_git::run_daily_push_loop(push_app).await;
+        });
+    }
 
     tracing::info!(bind = %bind, session_login = app.config.session_login_enabled(), "starting API server");
 

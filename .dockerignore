@@ -1,0 +1,9 @@
+# Runtime data — not needed in image builds
+data/
+.git/
+node_modules/
+frontend/node_modules/
+frontend/.playwright-mcp/
+.env
+*.md
+.cursor/

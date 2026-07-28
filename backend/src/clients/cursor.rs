@@ -76,7 +76,7 @@ pub struct RunInfo {
 pub struct GetRunResponse {
     pub id: String,
     pub status: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_run_result")]
     pub result: Option<RunResult>,
 }
 
@@ -84,6 +84,46 @@ pub struct GetRunResponse {
 pub struct RunResult {
     pub text: Option<String>,
     pub git: Option<GitResult>,
+}
+
+impl GetRunResponse {
+    pub fn result_text(&self) -> Option<String> {
+        self.result.as_ref().and_then(|r| r.text.clone())
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self.status.as_str(),
+            "COMPLETED" | "FINISHED" | "FAILED" | "CANCELLED"
+        )
+    }
+}
+
+fn deserialize_run_result<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<RunResult>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    Ok(match value {
+        None => None,
+        Some(serde_json::Value::String(text)) => Some(RunResult {
+            text: Some(text),
+            git: None,
+        }),
+        Some(serde_json::Value::Object(obj)) => {
+            let text = obj.get("text").and_then(|v| v.as_str()).map(String::from);
+            let git = obj
+                .get("git")
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
+            Some(RunResult { text, git })
+        }
+        Some(other) => Some(RunResult {
+            text: Some(other.to_string()),
+            git: None,
+        }),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,10 +245,10 @@ impl CursorClient {
     ) -> Result<GetRunResponse> {
         loop {
             let run = self.get_run(agent_id, run_id).await?;
-            match run.status.as_str() {
-                "COMPLETED" | "FAILED" | "CANCELLED" => return Ok(run),
-                _ => tokio::time::sleep(poll_interval).await,
+            if run.is_terminal() {
+                return Ok(run);
             }
+            tokio::time::sleep(poll_interval).await;
         }
     }
 
@@ -255,7 +295,9 @@ impl CursorClient {
             .await
             .map_err(|e| AutoForgeError::CursorApi(e.to_string()))?;
 
-        let models = if let Some(arr) = value.get("models").and_then(|v| v.as_array()) {
+        let models = if let Some(arr) = value.get("items").and_then(|v| v.as_array()) {
+            parse_model_array(arr)
+        } else if let Some(arr) = value.get("models").and_then(|v| v.as_array()) {
             parse_model_array(arr)
         } else if let Some(arr) = value.as_array() {
             parse_model_array(arr)
@@ -273,11 +315,11 @@ impl CursorClient {
     pub fn fallback_models() -> Vec<CursorModelInfo> {
         [
             ("claude-haiku-4-5", "Claude Haiku 4.5"),
-            ("claude-4.6-sonnet-high-thinking", "Claude Sonnet 4.6"),
-            ("claude-sonnet-5-thinking-high", "Claude Sonnet 5"),
-            ("claude-fable-5-thinking-high", "Claude Fable 5"),
-            ("gpt-5.3-codex-high", "GPT-5.3 Codex"),
-            ("gpt-5.5-medium", "GPT-5.5"),
+            ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+            ("claude-sonnet-5", "Claude Sonnet 5"),
+            ("claude-fable-5", "Claude Fable 5"),
+            ("gpt-5.3-codex", "GPT-5.3 Codex"),
+            ("gpt-5.5", "GPT-5.5"),
             ("composer-2.5", "Composer 2.5"),
         ]
         .into_iter()

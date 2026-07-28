@@ -84,9 +84,7 @@ jobs:
         run: docker compose -f compose.yml build
 
       - name: Start stack
-        run: |
-          docker compose -f compose.yml up -d
-          sleep 8
+        run: docker compose -f compose.yml up -d --wait --wait-timeout 180
 
       - name: Wait for API readiness
         run: |

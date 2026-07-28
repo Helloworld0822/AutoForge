@@ -201,7 +201,9 @@ export function NewProjectPage() {
             )}
             {languageMode === 'auto' && (
               <p className="text-xs text-muted">
-                Summarize 단계에서 계획서를 분석해 최적의 언어를 자동으로 결정합니다.
+                Summarize 단계에서 계획서를 분석해 예상 사용자 규모, 서버 성능·비용,
+                배포 환경, 한국 산업 맥락(공공·대기업은 Java, 빠른 출시 스타트업은 Python 등)을
+                종합해 최적의 언어를 자동으로 결정합니다.
               </p>
             )}
           </div>
@@ -315,7 +317,8 @@ export function NewProjectPage() {
               인프라/CI/CD 설계
             </li>
             <li>
-              <strong className="text-foreground">Design</strong> — Stitch로 UI 디자인
+              <strong className="text-foreground">Design</strong> — Stitch AI 생성 또는 Figma
+              디자인 파일
             </li>
             <li>
               <strong className="text-foreground">Implement</strong> — Codex 5.3이 코드 + DevOps

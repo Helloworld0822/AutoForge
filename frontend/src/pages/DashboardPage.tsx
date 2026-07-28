@@ -1,32 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useProjects } from '../hooks/useProjects';
 import { Link } from 'react-router-dom';
-import { listProjects } from '../api/client';
 import { ProjectCard } from '../components/ProjectCard';
-import type { Project } from '../types';
 
 export function DashboardPage() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = async () => {
-    setLoading(true);
-    try {
-      const data = await listProjects();
-      setProjects(data);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '목록 로드 실패');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    load();
-    const timer = setInterval(load, 5000);
-    return () => clearInterval(timer);
-  }, []);
+  const { projects, loading, error, refresh } = useProjects();
 
   const running = projects.filter((p) => p.state === 'running').length;
   const completed = projects.filter((p) => p.state === 'completed').length;
@@ -46,7 +23,7 @@ export function DashboardPage() {
           <button
             type="button"
             className="group flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-foreground transition-colors hover:bg-surface-variant active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={load}
+            onClick={refresh}
             disabled={loading}
           >
             <span

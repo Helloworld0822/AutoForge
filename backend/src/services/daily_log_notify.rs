@@ -23,6 +23,13 @@ pub async fn record_daily_event(
         )
         .await?;
 
+    if let Some(git) = &app.project_git {
+        let rel = format!("daily/{date}.md");
+        let _ = git
+            .commit_path(project_id, &rel, &format!("daily: {date} progress log"))
+            .await;
+    }
+
     app.store.save(project).await?;
 
     if let Some(slack) = &app.slack {

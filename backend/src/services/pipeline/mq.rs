@@ -17,7 +17,7 @@ use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-const REDIS_READ_RETRIES: u32 = 3;
+const MQ_READ_RETRIES: u32 = 3;
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_EVENT_RETRIES: i64 = 5;
 const STALE_CLAIM_MIN_IDLE_MS: i64 = 30_000;
@@ -84,19 +84,22 @@ async fn read_commands_resilient(
     block_ms: u64,
 ) -> Result<Vec<(String, crate::services::queue::messages::QueueCommand)>> {
     let mut last_err = None;
-    for attempt in 0..REDIS_READ_RETRIES {
+    for attempt in 0..MQ_READ_RETRIES {
         match mq.read_commands(consumer, count, block_ms).await {
             Ok(messages) => return Ok(messages),
             Err(e) => {
                 last_err = Some(e);
-                if attempt + 1 < REDIS_READ_RETRIES {
-                    warn!(attempt = attempt + 1, "redis command read failed, retrying");
+                if attempt + 1 < MQ_READ_RETRIES {
+                    warn!(
+                        attempt = attempt + 1,
+                        "rabbitmq command read failed, retrying"
+                    );
                     tokio::time::sleep(Duration::from_millis(250 * (attempt + 1) as u64)).await;
                 }
             }
         }
     }
-    Err(last_err.unwrap_or_else(|| AutoForgeError::Queue("redis read failed".into())))
+    Err(last_err.unwrap_or_else(|| AutoForgeError::Queue("rabbitmq read failed".into())))
 }
 
 async fn read_events_resilient(
@@ -106,22 +109,25 @@ async fn read_events_resilient(
     block_ms: u64,
 ) -> Result<Vec<(String, PipelineEvent)>> {
     let mut last_err = None;
-    for attempt in 0..REDIS_READ_RETRIES {
+    for attempt in 0..MQ_READ_RETRIES {
         match mq.read_events(consumer, count, block_ms).await {
             Ok(messages) => return Ok(messages),
             Err(e) => {
                 last_err = Some(e);
-                if attempt + 1 < REDIS_READ_RETRIES {
-                    warn!(attempt = attempt + 1, "redis event read failed, retrying");
+                if attempt + 1 < MQ_READ_RETRIES {
+                    warn!(
+                        attempt = attempt + 1,
+                        "rabbitmq event read failed, retrying"
+                    );
                     tokio::time::sleep(Duration::from_millis(250 * (attempt + 1) as u64)).await;
                 }
             }
         }
     }
-    Err(last_err.unwrap_or_else(|| AutoForgeError::Queue("redis read failed".into())))
+    Err(last_err.unwrap_or_else(|| AutoForgeError::Queue("rabbitmq read failed".into())))
 }
 
-/// Worker 루프 — Redis Streams 커맨드 소비 (프로세스 내 WORKER_CONCURRENCY 병렬 처리)
+/// Worker 루프 — RabbitMQ 커맨드 소비 (프로세스 내 WORKER_CONCURRENCY 병렬 처리)
 pub async fn run_worker(
     app: Arc<App>,
     consumer_name: String,
@@ -363,16 +369,18 @@ async fn handle_event_with_retry(
                     .dead_letter(&mq.events_stream, msg_id, &payload, &e.to_string())
                     .await
                 {
-                    error!(error = %dlq_err, "failed to move event to dead-letter stream");
+                    error!(error = %dlq_err, "failed to move event to dead-letter queue");
                 } else {
                     error!(
                         ?event,
-                        attempt, "event moved to dead-letter stream after max retries"
+                        attempt, "event moved to dead-letter queue after max retries"
                     );
                 }
                 if let Err(ack_err) = mq.ack_event(msg_id).await {
                     error!(error = %ack_err, "failed to ack dead-lettered event");
                 }
+            } else if let Err(nack_err) = mq.nack_for_requeue(msg_id).await {
+                error!(error = %nack_err, msg_id, "failed to requeue event for retry");
             }
         }
     }

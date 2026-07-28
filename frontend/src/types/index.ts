@@ -48,6 +48,14 @@ export interface StageStatus {
   status: StageState;
 }
 
+export interface ActivityEntry {
+  at: string;
+  event: string;
+  stage?: StageId;
+  message: string;
+  progress_percent: number;
+}
+
 export interface Project {
   id: string;
   name: string | null;
@@ -55,6 +63,9 @@ export interface Project {
   state: PipelineState;
   stages: StageStatus[];
   progress_percent: number;
+  current_stage?: StageId | null;
+  last_error?: string | null;
+  recent_activity?: ActivityEntry[];
   pr_url: string | null;
   merge_status: string | null;
   github_repo: string | null;
@@ -98,6 +109,7 @@ export interface CreateProjectResponse {
   message: string;
   mode: string;
   stream_url: string;
+  ws_url: string;
   progress_percent: number;
   github_auto_created: boolean;
   has_devops_plan: boolean;
@@ -140,6 +152,8 @@ export interface PipelineModelConfig {
   debug?: string;
   security_patch?: string;
   design_device_type?: string;
+  design_source?: 'stitch' | 'figma';
+  figma_file_url?: string;
 }
 
 export interface CursorModel {
@@ -167,7 +181,7 @@ export const STAGE_META: Record<
     description: '시스템 아키텍처 & 상세 기획',
     model: 'Sonnet',
   },
-  design: { label: 'Design', description: 'UI 디자인 생성', model: 'Stitch' },
+  design: { label: 'Design', description: 'UI 디자인 (Stitch 또는 Figma)', model: 'Stitch / Figma' },
   implement: {
     label: 'Implement',
     description: '코드 구현 & PR 생성',

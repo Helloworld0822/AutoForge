@@ -1,19 +1,43 @@
 use std::env;
 
+fn stitch_bearer_available(static_token: &str) -> bool {
+    crate::clients::stitch_token::StitchTokenProvider::from_env(static_token.to_string(), None)
+        .can_provide_token()
+}
+
+fn optional_non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|v| {
+        let trimmed = v.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub host: String,
     pub port: u16,
     pub cursor_api_key: String,
     pub stitch_api_key: String,
+    /// Stitch AI 생성(generate_screen 등)용 OAuth Bearer 토큰. API 키만으로는 생성 불가.
+    pub stitch_access_token: String,
+    /// Figma REST API Personal Access Token — Design 단계(figma 소스)용
+    pub figma_access_token: String,
+    /// Bearer 인증 시 GCP 과금/quota 프로젝트 (X-Goog-User-Project)
+    pub google_cloud_project: Option<String>,
     /// 파이프라인 산출물 및 이미지 호스팅 파일을 저장할 로컬 디렉터리
     pub artifacts_dir: String,
     /// 업로드 이미지 최대 크기 (bytes, 기본 10MB)
     pub max_image_bytes: usize,
     pub default_repo_url: Option<String>,
     pub max_debug_cycles: u8,
-    /// Redis URL — 설정 시 MQ 모드 활성화
+    /// Redis URL — 프로젝트 스토어 및 실시간 알림(pub/sub)
     pub redis_url: String,
+    /// RabbitMQ AMQP URL — 파이프라인 커맨드/이벤트 큐
+    pub rabbitmq_url: String,
     pub slack_webhook_url: Option<String>,
     pub slack_bot_token: Option<String>,
     pub slack_channel: Option<String>,
@@ -43,6 +67,10 @@ pub struct Config {
     pub cors_allowed_origins: Option<Vec<String>>,
     /// 업로드 최대 크기 (bytes, 기본 50MB)
     pub max_upload_bytes: usize,
+    /// 파이프라인 산출물 생성 시 프로젝트별 git 자동 커밋
+    pub git_auto_commit: bool,
+    /// 일일 git push 시각 (UTC, 0–23)
+    pub git_daily_push_hour_utc: u8,
 }
 
 impl Config {
@@ -55,6 +83,14 @@ impl Config {
                 .unwrap_or(8080),
             cursor_api_key: env::var("CURSOR_API_KEY").unwrap_or_default(),
             stitch_api_key: env::var("STITCH_API_KEY").unwrap_or_default(),
+            stitch_access_token: env::var("STITCH_ACCESS_TOKEN").unwrap_or_default(),
+            figma_access_token: env::var("FIGMA_ACCESS_TOKEN").unwrap_or_default(),
+            google_cloud_project: optional_non_empty(
+                env::var("GOOGLE_CLOUD_PROJECT")
+                    .or_else(|_| env::var("GCLOUD_PROJECT"))
+                    .ok(),
+            )
+            .or_else(crate::clients::stitch_token::resolve_gcloud_config_project),
             artifacts_dir: env::var("ARTIFACTS_DIR").unwrap_or_else(|_| "./data/artifacts".into()),
             max_image_bytes: env::var("MAX_IMAGE_BYTES")
                 .ok()
@@ -66,13 +102,15 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3),
             redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into()),
+            rabbitmq_url: env::var("RABBITMQ_URL")
+                .unwrap_or_else(|_| "amqp://guest:guest@127.0.0.1:5672/".into()),
             slack_webhook_url: env::var("SLACK_WEBHOOK_URL").ok(),
             slack_bot_token: env::var("SLACK_BOT_TOKEN").ok(),
             slack_channel: env::var("SLACK_CHANNEL").ok(),
             queue_commands_stream: env::var("QUEUE_COMMANDS_STREAM")
-                .unwrap_or_else(|_| "autoforge:commands".into()),
+                .unwrap_or_else(|_| "autoforge.commands".into()),
             queue_events_stream: env::var("QUEUE_EVENTS_STREAM")
-                .unwrap_or_else(|_| "autoforge:events".into()),
+                .unwrap_or_else(|_| "autoforge.events".into()),
             queue_consumer_group: env::var("QUEUE_CONSUMER_GROUP")
                 .unwrap_or_else(|_| "autoforge".into()),
             worker_concurrency: env::var("WORKER_CONCURRENCY")
@@ -81,8 +119,8 @@ impl Config {
                 .unwrap_or(4),
             podman_worker_image: env::var("PODMAN_WORKER_IMAGE")
                 .unwrap_or_else(|_| "localhost/autoforge:latest".into()),
-            github_token: env::var("GITHUB_TOKEN").ok(),
-            github_org: env::var("GITHUB_ORG").ok(),
+            github_token: optional_non_empty(env::var("GITHUB_TOKEN").ok()),
+            github_org: optional_non_empty(env::var("GITHUB_ORG").ok()),
             github_auto_merge: env::var("GITHUB_AUTO_MERGE")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(true),
@@ -101,6 +139,13 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(50 * 1024 * 1024),
+            git_auto_commit: env::var("GIT_AUTO_COMMIT")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(true),
+            git_daily_push_hour_utc: env::var("GIT_DAILY_PUSH_HOUR_UTC")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(23),
         }
     }
 
@@ -115,11 +160,8 @@ impl Config {
         format!("{}:{}", self.host, self.port)
     }
 
-    /// Redis + MQ 스트림 사용 여부
+    /// RabbitMQ 기반 분산 파이프라인 사용 여부
     /// `MESSAGE_QUEUE_ENABLED`이 명시적으로 설정된 경우에만 그 값을 따른다.
-    /// `REDIS_URL`은 항상 기본값(`redis://127.0.0.1:6379`)을 가지므로 이를 근거로
-    /// 자동 판단하면 로컬 단일 프로세스 모드에서도 Redis 연결을 시도해 기동이
-    /// 무한 대기하는 문제가 있었다 — 반드시 명시적 플래그로만 판단한다.
     pub fn message_queue_enabled(&self) -> bool {
         env::var("MESSAGE_QUEUE_ENABLED")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -147,8 +189,29 @@ impl Config {
         if self.cursor_api_key.is_empty() {
             tracing::warn!("CURSOR_API_KEY is not set — Summarize/Architect/Implement/Verify/Debug stages will fail");
         }
-        if self.stitch_api_key.is_empty() {
-            tracing::warn!("STITCH_API_KEY is not set — Design stage will fail");
+        if self.stitch_api_key.is_empty() && !stitch_bearer_available(&self.stitch_access_token) {
+            tracing::warn!(
+                "STITCH_API_KEY / Stitch Bearer credentials not set — Design stage will fail"
+            );
+        } else if !stitch_bearer_available(&self.stitch_access_token) {
+            tracing::warn!(
+                "Stitch Bearer credentials not available — API key alone cannot run generate_screen; \
+                 run `gcloud auth application-default login`, mount ADC in Compose, or refresh STITCH_ACCESS_TOKEN"
+            );
+        } else if crate::clients::stitch_token::is_token_expired(&self.stitch_access_token) {
+            tracing::warn!(
+                "STITCH_ACCESS_TOKEN in .env looks expired — remove it to use ADC auto-refresh, or update the token"
+            );
+        } else if self.google_cloud_project.is_none() {
+            tracing::warn!(
+                "GOOGLE_CLOUD_PROJECT is not set — Stitch generate_screen may fail; \
+                 set it to your GCP project ID (e.g. gcloud config set project YOUR_PROJECT)"
+            );
+        }
+        if self.figma_access_token.is_empty() {
+            tracing::warn!(
+                "FIGMA_ACCESS_TOKEN is not set — Design stage with design_source=figma will fail"
+            );
         }
         if self.login_username.is_some() ^ self.login_password.is_some() {
             tracing::warn!(
@@ -171,8 +234,8 @@ impl Config {
         if self.github_enabled() && self.github_token.as_deref().unwrap_or_default().len() < 10 {
             tracing::warn!("GITHUB_TOKEN looks malformed (too short) — GitHub automation may fail");
         }
-        if self.message_queue_enabled() && self.redis_url.is_empty() {
-            tracing::warn!("MESSAGE_QUEUE_ENABLED is true but REDIS_URL is empty");
+        if self.message_queue_enabled() && self.rabbitmq_url.is_empty() {
+            tracing::warn!("MESSAGE_QUEUE_ENABLED is true but RABBITMQ_URL is empty");
         }
         if self.public_url.starts_with("http://localhost") {
             tracing::warn!(

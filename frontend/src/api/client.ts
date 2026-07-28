@@ -135,6 +135,25 @@ export async function cancelProject(id: string): Promise<void> {
   await request(`/v1/projects/${id}/cancel`, { method: 'POST' });
 }
 
+export interface RestartProjectOptions {
+  modelConfig?: PipelineModelConfig;
+  fromStage?: string;
+}
+
+export async function restartProject(
+  id: string,
+  options: RestartProjectOptions = {},
+): Promise<void> {
+  await request(`/v1/projects/${id}/restart`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model_config: options.modelConfig,
+      from_stage: options.fromStage,
+    }),
+  });
+}
+
 export async function submitArchitectureAnswers(
   projectId: string,
   answers: { id: string; answer: string }[],
@@ -181,24 +200,4 @@ export async function uploadImage(file: File): Promise<UploadImageResponse> {
 
 export async function listImages(): Promise<HostedImage[]> {
   return request<HostedImage[]>('/v1/images');
-}
-
-export function subscribeProjectStream(
-  id: string,
-  onUpdate: (data: unknown) => void,
-  onError?: (err: Event) => void,
-): () => void {
-  const source = new EventSource(`${API_BASE}/v1/projects/${id}/stream`);
-  source.addEventListener('status', (e) => {
-    try {
-      onUpdate(JSON.parse(e.data));
-    } catch {
-      onUpdate(e.data);
-    }
-  });
-  source.onerror = (e) => {
-    onError?.(e);
-    source.close();
-  };
-  return () => source.close();
 }

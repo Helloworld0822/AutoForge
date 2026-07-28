@@ -14,6 +14,8 @@ path = "src/main.rs"
 tokio = { version = "1", features = ["full"] }
 actix-web = "4"
 actix-session = { version = "0.10", features = ["cookie-session"] }
+actix-web-actors = "4"
+actix = "0.13"
 actix-multipart = "0.7"
 actix-cors = "0.7"
 subtle = "2"
@@ -37,6 +39,8 @@ sha2 = "0.10"
 hex = "0.4"
 dashmap = "6"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+lapin = { version = "2.5", default-features = false, features = ["rustls"] }
+jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
 
 [profile.release]
 lto = "thin"

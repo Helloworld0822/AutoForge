@@ -1,6 +1,8 @@
 use crate::domain::ArtifactRef;
 use crate::error::{AutoForgeError, Result};
 use sha2::{Digest, Sha256};
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone)]
 pub struct IngestResult {
@@ -24,14 +26,12 @@ pub fn ingest_pdf(bytes: &[u8]) -> Result<IngestResult> {
         .map_err(|e| AutoForgeError::Ingest(format!("PDF parse failed: {e}")))?;
 
     let page_count = doc.get_pages().len() as u32;
-    let raw_text = doc
+    let mut raw_text = doc
         .extract_text(&[])
         .map_err(|e| AutoForgeError::Ingest(format!("text extraction failed: {e}")))?;
 
     if raw_text.trim().is_empty() {
-        return Err(AutoForgeError::Ingest(
-            "no extractable text — OCR fallback required".into(),
-        ));
+        raw_text = extract_text_pdftotext(bytes)?;
     }
 
     Ok(IngestResult {
@@ -39,6 +39,58 @@ pub fn ingest_pdf(bytes: &[u8]) -> Result<IngestResult> {
         page_count,
         sha256,
     })
+}
+
+/// lopdf가 폰트/인코딩 때문에 빈 문자열을 반환할 때 poppler pdftotext로 재시도한다.
+fn extract_text_pdftotext(bytes: &[u8]) -> Result<String> {
+    let mut child = Command::new("pdftotext")
+        .args(["-", "-", "-layout"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                AutoForgeError::Ingest(
+                    "no extractable text — install poppler-utils (pdftotext) or use a text-based PDF"
+                        .into(),
+                )
+            } else {
+                AutoForgeError::Ingest(format!("pdftotext spawn failed: {e}"))
+            }
+        })?;
+
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| AutoForgeError::Ingest("pdftotext stdin unavailable".into()))?;
+        stdin
+            .write_all(bytes)
+            .map_err(|e| AutoForgeError::Ingest(format!("pdftotext write failed: {e}")))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| AutoForgeError::Ingest(format!("pdftotext wait failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AutoForgeError::Ingest(format!(
+            "pdftotext failed: {stderr}"
+        )));
+    }
+
+    let text = String::from_utf8(output.stdout)
+        .map_err(|e| AutoForgeError::Ingest(format!("pdftotext output not UTF-8: {e}")))?;
+
+    if text.trim().is_empty() {
+        return Err(AutoForgeError::Ingest(
+            "no extractable text — scanned PDF may need OCR (use a text-based PDF export)".into(),
+        ));
+    }
+
+    Ok(text)
 }
 
 /// DevOps 계획서 직접 입력 (Markdown/YAML/텍스트)

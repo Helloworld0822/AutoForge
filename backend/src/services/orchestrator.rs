@@ -258,6 +258,59 @@ impl DagScheduler {
     pub fn has_failed(&self) -> bool {
         self.failed.is_some()
     }
+
+    pub fn failed_stage(&self) -> Option<StageId> {
+        self.failed
+    }
+
+    /// 실패한 스테이지부터 파이프라인 재시작을 위해 스케줄러 상태를 되돌린다.
+    pub fn prepare_restart(&mut self, stage: StageId) {
+        self.failed = None;
+        self.running.remove(&stage);
+
+        match stage {
+            StageId::Verify => {
+                self.quality.verify_passed = false;
+                self.quality.awaiting_debug = false;
+                self.quality.debug_cycles = 0;
+                self.completed.remove(&StageId::Verify);
+            }
+            StageId::Debug => {
+                self.quality.awaiting_debug = true;
+                self.running.remove(&StageId::Debug);
+            }
+            StageId::SecurityPatch => {
+                self.quality.security_done = false;
+                self.completed.remove(&StageId::SecurityPatch);
+            }
+            StageId::Architect => {
+                if self.architecture.finalized {
+                    self.architecture.finalized = false;
+                    self.architecture.awaiting_answers = false;
+                } else if self.architecture.draft_done {
+                    self.architecture.awaiting_answers = false;
+                } else {
+                    self.architecture.draft_done = false;
+                    self.architecture.awaiting_answers = false;
+                }
+                self.completed.remove(&StageId::Architect);
+            }
+            StageId::Implement => {
+                self.completed.remove(&StageId::Implement);
+                self.quality.verify_passed = false;
+                self.quality.awaiting_debug = false;
+                self.quality.debug_cycles = 0;
+                self.quality.security_done = false;
+                self.completed.remove(&StageId::Verify);
+                self.completed.remove(&StageId::Debug);
+                self.completed.remove(&StageId::SecurityPatch);
+                self.completed.remove(&StageId::Deliver);
+            }
+            StageId::Design | StageId::Summarize | StageId::Ingest | StageId::Deliver => {
+                self.completed.remove(&stage);
+            }
+        }
+    }
 }
 
 impl Default for DagScheduler {
@@ -433,5 +486,27 @@ mod tests {
 
         let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
         assert!(ready.contains(&StageId::Deliver));
+    }
+
+    #[test]
+    fn prepare_restart_after_verify_exhausted() {
+        let mut sched = DagScheduler::with_quality(ProjectId::new(), 1);
+        for stage in [StageId::Ingest, StageId::Summarize, StageId::Design] {
+            complete_through(&mut sched, stage);
+        }
+        sched.record_architect_finalized();
+        complete_through(&mut sched, StageId::Implement);
+        sched.record_verify_result(false);
+        sched.mark_running(StageId::Debug);
+        sched.record_debug_done();
+        sched.record_verify_result(false);
+
+        assert!(sched.has_failed());
+        assert!(sched.ready_stages().is_empty());
+
+        sched.prepare_restart(StageId::Verify);
+        assert!(!sched.has_failed());
+        let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
+        assert!(ready.contains(&StageId::Verify));
     }
 }

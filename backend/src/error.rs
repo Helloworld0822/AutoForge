@@ -9,6 +9,9 @@ pub enum AutoForgeError {
     #[error("stitch API error: {0}")]
     StitchApi(String),
 
+    #[error("figma API error: {0}")]
+    FigmaApi(String),
+
     #[error("ingest error: {0}")]
     Ingest(String),
 

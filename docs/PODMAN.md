@@ -132,6 +132,27 @@ podman run --rm -e STAGE_FILTER=implement localhost/autoforge-api:latest worker
 2. `podman compose`
 3. `podman-compose` (legacy)
 
+### `com.docker.compose.network` 라벨 오류
+
+`podman-compose`로 먼저 올린 뒤 `docker compose`(Podman 소켓)로 다시 실행하면 아래 오류가 날 수 있습니다.
+
+```
+network autoforge_default was found but has incorrect label com.docker.compose.network set to "" (expected: "default")
+```
+
+원인: `podman-compose`가 만든 네트워크에 Docker Compose용 라벨이 없음.
+
+`./scripts/compose-up.sh` / `./scripts/podman-up.sh`는 시작 전에 라벨을 검사하고, 필요 시 stale 컨테이너·네트워크를 정리합니다.
+
+수동 복구:
+
+```bash
+podman rm -f $(podman ps -aq --filter network=autoforge_default)
+podman pod rm -f pod_autoforge 2>/dev/null || true
+podman network rm -f autoforge_default
+./scripts/podman-up.sh
+```
+
 ## 로컬 개발 (MQ 없이)
 
 ```bash

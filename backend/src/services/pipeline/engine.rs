@@ -63,6 +63,7 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
         artifacts: app.artifacts.clone(),
         cursor: app.cursor.clone(),
         stitch: app.stitch.clone(),
+        figma: app.figma.clone(),
         input: accumulated,
         repo_url: project
             .repo_url
@@ -88,6 +89,20 @@ pub async fn apply_stage_output_async(
     stage: StageId,
     output: StageOutput,
 ) -> Result<PipelineOutcome> {
+    if let Some(git) = &app.project_git {
+        if let Err(e) = git
+            .commit_stage_artifacts(project.id.0, stage, &output.artifacts)
+            .await
+        {
+            tracing::warn!(
+                project_id = %project.id.0,
+                ?stage,
+                error = %e,
+                "git commit for stage artifacts failed"
+            );
+        }
+    }
+
     let outcome = apply_stage_output(project, stage, output)?;
 
     if stage == StageId::SecurityPatch {
@@ -396,6 +411,46 @@ pub async fn resume_project_pipeline(app: Arc<App>, project_id: Uuid) -> Result<
         });
         Ok(())
     }
+}
+
+/// 실패한 파이프라인을 지정 스테이지부터 재시작한다. model_config가 주어지면 병합한다.
+pub async fn prepare_pipeline_restart(
+    project: &mut Project,
+    from_stage: StageId,
+    model_config: Option<crate::domain::PipelineModelConfig>,
+) -> Result<()> {
+    if !matches!(
+        project.state,
+        PipelineState::Failed | PipelineState::Cancelled
+    ) {
+        return Err(AutoForgeError::BadRequest(format!(
+            "pipeline restart requires failed or cancelled state (current: {:?})",
+            project.state
+        )));
+    }
+
+    project.scheduler.prepare_restart(from_stage);
+    project.stages.insert(from_stage, StageState::Queued);
+
+    if matches!(from_stage, StageId::Implement) {
+        for downstream in [
+            StageId::Verify,
+            StageId::Debug,
+            StageId::SecurityPatch,
+            StageId::Deliver,
+        ] {
+            if project.stages.get(&downstream) == Some(&StageState::Failed) {
+                project.stages.insert(downstream, StageState::Queued);
+            }
+        }
+    }
+
+    if let Some(config) = model_config {
+        project.model_config.merge_from(&config);
+    }
+
+    project.state = PipelineState::Running;
+    Ok(())
 }
 
 #[derive(Debug)]
