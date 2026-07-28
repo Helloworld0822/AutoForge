@@ -1,6 +1,7 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { getHealth } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
 import type { HealthResponse } from '../types';
 
 const nav = [
@@ -33,6 +34,7 @@ const statusItems = [
 
 export function Layout() {
   const location = useLocation();
+  const { user, logout } = useAuth();
   const [health, setHealth] = useState<HealthResponse | null>(null);
 
   useEffect(() => {
@@ -83,6 +85,23 @@ export function Layout() {
         </div>
 
         <div className="flex flex-col gap-1 border-t border-border/30 pt-6">
+          {user?.session_login_enabled && user.authenticated && (
+            <div className="mb-2 flex items-center justify-between rounded-lg px-4 py-2">
+              <div className="flex flex-col gap-0.5">
+                <span className="font-label text-[10px] uppercase tracking-widest text-muted opacity-60">
+                  로그인
+                </span>
+                <span className="text-sm font-semibold text-foreground">{user.username}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => logout().catch(() => undefined)}
+                className="rounded-lg px-3 py-1.5 text-xs font-semibold text-muted transition hover:bg-surface-variant hover:text-foreground"
+              >
+                로그아웃
+              </button>
+            </div>
+          )}
           {statusItems.map(({ key, label, icon, ok }) => {
             const healthy = ok(health);
             return (
