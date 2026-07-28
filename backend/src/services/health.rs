@@ -187,6 +187,24 @@ pub async fn readiness(app: &App) -> HealthReport {
         checks.insert(k, v);
     }
 
+    if app.config.figma_access_token.is_empty() {
+        checks.insert(
+            "figma_api".into(),
+            skipped("FIGMA_ACCESS_TOKEN not configured"),
+        );
+    } else {
+        let figma = app.figma.clone();
+        let (k, mut v) = timed_check("figma_api", || {
+            let figma = figma.clone();
+            async move { figma.health_check().await }
+        })
+        .await;
+        if v.status == "error" {
+            v.status = "degraded";
+        }
+        checks.insert(k, v);
+    }
+
     HealthReport {
         status: if unhealthy { "unhealthy" } else { "ok" },
         service: "autoforge",

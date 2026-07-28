@@ -1,4 +1,5 @@
 pub mod cursor;
+pub mod figma;
 pub mod github;
 pub mod slack;
 pub mod stitch;

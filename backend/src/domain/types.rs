@@ -150,6 +150,12 @@ pub struct PipelineModelConfig {
     /// Stitch 디자인 단계 디바이스 타입 (DESKTOP | MOBILE)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design_device_type: Option<String>,
+    /// Design 단계 소스: stitch | figma (기본 stitch)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_source: Option<String>,
+    /// Figma 디자인/파일 URL (design_source=figma일 때)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub figma_file_url: Option<String>,
 }
 
 impl PipelineModelConfig {
@@ -186,6 +192,17 @@ impl PipelineModelConfig {
             .unwrap_or("DESKTOP")
     }
 
+    pub fn design_source(&self) -> &str {
+        self.design_source
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("stitch")
+    }
+
+    pub fn uses_figma_design(&self) -> bool {
+        self.design_source().eq_ignore_ascii_case("figma")
+    }
+
     pub fn defaults_view() -> Self {
         Self {
             summarize: Some(ModelProfile::summarize().model_id),
@@ -195,6 +212,8 @@ impl PipelineModelConfig {
             debug: Some(ModelProfile::debug().model_id),
             security_patch: Some(ModelProfile::security_patch().model_id),
             design_device_type: Some("DESKTOP".into()),
+            design_source: Some("stitch".into()),
+            figma_file_url: None,
         }
     }
 
@@ -220,6 +239,12 @@ impl PipelineModelConfig {
         }
         if other.design_device_type.is_some() {
             self.design_device_type = other.design_device_type.clone();
+        }
+        if other.design_source.is_some() {
+            self.design_source = other.design_source.clone();
+        }
+        if other.figma_file_url.is_some() {
+            self.figma_file_url = other.figma_file_url.clone();
         }
     }
 }

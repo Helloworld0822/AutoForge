@@ -145,6 +145,8 @@ export interface PipelineModelConfig {
   debug?: string;
   security_patch?: string;
   design_device_type?: string;
+  design_source?: 'stitch' | 'figma';
+  figma_file_url?: string;
 }
 
 export interface CursorModel {
@@ -172,7 +174,7 @@ export const STAGE_META: Record<
     description: '시스템 아키텍처 & 상세 기획',
     model: 'Sonnet',
   },
-  design: { label: 'Design', description: 'UI 디자인 생성', model: 'Stitch' },
+  design: { label: 'Design', description: 'UI 디자인 (Stitch 또는 Figma)', model: 'Stitch / Figma' },
   implement: {
     label: 'Implement',
     description: '코드 구현 & PR 생성',

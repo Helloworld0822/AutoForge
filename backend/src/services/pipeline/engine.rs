@@ -63,6 +63,7 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
         artifacts: app.artifacts.clone(),
         cursor: app.cursor.clone(),
         stitch: app.stitch.clone(),
+        figma: app.figma.clone(),
         input: accumulated,
         repo_url: project
             .repo_url
