@@ -13,14 +13,14 @@ pub struct FigmaFileRef {
     pub node_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct FigmaScreenExport {
     pub node_id: String,
     pub name: String,
     pub image_bytes: Bytes,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct FigmaDesignExport {
     pub file_key: String,
     pub file_name: Option<String>,
@@ -49,7 +49,7 @@ struct FigmaNodesResponse {
 
 #[derive(Debug, Deserialize)]
 struct FigmaImagesResponse {
-    images: serde_json::Map<String, Option<String>>,
+    images: serde_json::Map<String, serde_json::Value>,
 }
 
 impl FigmaClient {
@@ -74,7 +74,10 @@ impl FigmaClient {
             return Err("FIGMA_ACCESS_TOKEN is not configured".into());
         }
 
-        self.get("/me").await.map(|_| ()).map_err(|e| e.to_string())
+        self.get::<serde_json::Value>("/me")
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     /// Figma 디자인/파일 URL에서 file key와 node id를 추출한다.
@@ -165,7 +168,7 @@ impl FigmaClient {
             let image_url = images
                 .images
                 .get(&node_id)
-                .and_then(|value| value.clone())
+                .and_then(|value| value.as_str().map(str::to_string))
                 .ok_or_else(|| {
                     AutoForgeError::FigmaApi(format!("Figma did not return an image for {node_id}"))
                 })?;
