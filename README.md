@@ -40,7 +40,7 @@ nginx/Containerfile
 
 ```bash
 cp .env.example .env
-# .env 편집 (CURSOR_API_KEY, GITHUB_TOKEN 등)
+# .env 편집 (AGENT_API_KEY, AGENT_API_BASE_URL, GITHUB_TOKEN 등)
 
 # Docker
 ./scripts/compose-up.sh
@@ -72,7 +72,7 @@ cd frontend && npm install && npm run dev
 
 ## GitHub 자동화
 
-`GITHUB_TOKEN` 설정 시 프라이빗 레포 자동 생성 → Cursor PR 생성 → SecurityPatch 통과 후 자동 merge.
+`GITHUB_TOKEN` 설정 시 프라이빗 레포 자동 생성 → 에이전트 PR 생성 → SecurityPatch 통과 후 자동 merge.
 
 ```bash
 export GITHUB_TOKEN=ghp_xxxx
@@ -85,7 +85,7 @@ export GITHUB_AUTO_MERGE=true   # 기본값
 | Method | Path | 설명 | 인증 |
 |--------|------|------|------|
 | GET | `/health` | Liveness (프로세스 생존) | ❌ |
-| GET | `/ready` | Readiness (스토어/Redis/Cursor/Stitch 프로브) | ❌ |
+| GET | `/ready` | Readiness (스토어/Redis/Agent API/Stitch 프로브) | ❌ |
 | POST | `/v1/projects` | PDF 업로드 + DevOps 계획서(선택) + 파이프라인 시작 | ✅ |
 | GET | `/v1/projects` | 프로젝트 목록 | ✅ |
 | GET | `/v1/projects/{id}` | 프로젝트 상세 | ✅ |
@@ -135,14 +135,14 @@ curl -X POST http://localhost/v1/images \
 전체 목록은 [.env.example](.env.example) 참고. 주요 카테고리:
 
 - **서버**: `HOST`, `PORT`, `RUST_LOG`
-- **AI API 키**: `CURSOR_API_KEY`, `STITCH_API_KEY`, Stitch Bearer (`STITCH_ACCESS_TOKEN` 또는 ADC/gcloud 자동 갱신 — [상세](docs/STITCH_ACCESS_TOKEN.md))
+- **AI API 키**: `AGENT_API_KEY`, `AGENT_API_BASE_URL`, `STITCH_API_KEY`, Stitch Bearer (`STITCH_ACCESS_TOKEN` 또는 ADC/gcloud 자동 갱신 — [상세](docs/STITCH_ACCESS_TOKEN.md))
 - **GitHub 자동화**: `GITHUB_TOKEN`, `GITHUB_ORG`, `GITHUB_AUTO_MERGE`
 - **보안**: `API_KEY`, `CORS_ALLOWED_ORIGINS`, `MAX_UPLOAD_BYTES` — 운영 배포 전 반드시 확인
 - **아티팩트/이미지 저장소 (로컬 디스크)**: `ARTIFACTS_DIR`, `MAX_IMAGE_BYTES`
 - **RabbitMQ (분산 모드)**: `MESSAGE_QUEUE_ENABLED`, `RABBITMQ_URL` 등 — 기본값은 단일 프로세스(false). Redis는 프로젝트 스토어/알림용
 - **Slack 알림**: `SLACK_WEBHOOK_URL` 또는 `SLACK_BOT_TOKEN`+`SLACK_CHANNEL`
 
-서버 기동 시 누락되거나 위험한 설정(예: `API_KEY` 미설정, `CURSOR_API_KEY` 비어있음)은
+서버 기동 시 누락되거나 위험한 설정(예: `API_KEY` 미설정, `AGENT_API_KEY`/`AGENT_API_BASE_URL` 비어있음)은
 로그에 경고로 출력됩니다.
 
 ## GitHub Actions CI/CD 배포
