@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { listModels } from '../api/client';
-import type { CursorModel, PipelineModelConfig, StageId } from '../types';
+import type { AgentModel, PipelineModelConfig, StageId } from '../types';
 
 const STAGE_FIELDS: {
   key: keyof PipelineModelConfig;
@@ -53,7 +53,7 @@ interface ModelConfigPanelProps {
 
 export function ModelConfigPanel({ value, onChange }: ModelConfigPanelProps) {
   const [expanded, setExpanded] = useState(false);
-  const [models, setModels] = useState<CursorModel[]>([]);
+  const [models, setModels] = useState<AgentModel[]>([]);
   const [defaults, setDefaults] = useState<PipelineModelConfig>({});
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);

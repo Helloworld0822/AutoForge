@@ -100,13 +100,13 @@ export interface PipelineModelConfig {
   design_device_type?: string;
 }
 
-export interface CursorModel {
+export interface AgentModel {
   id: string;
   name?: string | null;
 }
 
 export interface ModelsListResponse {
-  models: CursorModel[];
+  models: AgentModel[];
   defaults: PipelineModelConfig;
 }
 
