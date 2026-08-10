@@ -3,8 +3,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AutoForgeError {
-    #[error("cursor API error: {0}")]
-    CursorApi(String),
+    #[error("agent API error: {0}")]
+    AgentApi(String),
 
     #[error("stitch API error: {0}")]
     StitchApi(String),

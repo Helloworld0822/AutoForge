@@ -5,12 +5,11 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::instrument;
 
-const CURSOR_API_BASE: &str = "https://api.cursor.com";
-
 #[derive(Clone)]
-pub struct CursorClient {
+pub struct AgentClient {
     http: Client,
     api_key: String,
+    base_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,23 +97,26 @@ pub struct GitBranch {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct CursorModelInfo {
+pub struct AgentModelInfo {
     pub id: String,
     #[serde(default)]
     pub name: Option<String>,
 }
 
-impl CursorClient {
-    pub fn new(api_key: impl Into<String>) -> Result<Self> {
+impl AgentClient {
+    pub fn new(api_key: impl Into<String>, base_url: impl Into<String>) -> Result<Self> {
         let http = Client::builder()
             .timeout(Duration::from_secs(300))
             .pool_max_idle_per_host(8)
             .build()
-            .map_err(|e| AutoForgeError::CursorApi(e.to_string()))?;
+            .map_err(|e| AutoForgeError::AgentApi(e.to_string()))?;
+
+        let base_url = base_url.into().trim_end_matches('/').to_string();
 
         Ok(Self {
             http,
             api_key: api_key.into(),
+            base_url,
         })
     }
 
@@ -153,48 +155,49 @@ impl CursorClient {
 
         let resp = self
             .http
-            .post(format!("{CURSOR_API_BASE}/v1/agents"))
-            .basic_auth(&self.api_key, Some(""))
+            .post(format!("{}/v1/agents", self.base_url))
+            .bearer_auth(&self.api_key)
             .json(&body)
             .send()
             .await
-            .map_err(|e| AutoForgeError::CursorApi(e.to_string()))?;
+            .map_err(|e| AutoForgeError::AgentApi(e.to_string()))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(AutoForgeError::CursorApi(format!(
+            return Err(AutoForgeError::AgentApi(format!(
                 "create agent failed ({status}): {body}"
             )));
         }
 
         resp.json()
             .await
-            .map_err(|e| AutoForgeError::CursorApi(e.to_string()))
+            .map_err(|e| AutoForgeError::AgentApi(e.to_string()))
     }
 
     pub async fn get_run(&self, agent_id: &str, run_id: &str) -> Result<GetRunResponse> {
         let resp = self
             .http
             .get(format!(
-                "{CURSOR_API_BASE}/v1/agents/{agent_id}/runs/{run_id}"
+                "{}/v1/agents/{agent_id}/runs/{run_id}",
+                self.base_url
             ))
-            .basic_auth(&self.api_key, Some(""))
+            .bearer_auth(&self.api_key)
             .send()
             .await
-            .map_err(|e| AutoForgeError::CursorApi(e.to_string()))?;
+            .map_err(|e| AutoForgeError::AgentApi(e.to_string()))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(AutoForgeError::CursorApi(format!(
+            return Err(AutoForgeError::AgentApi(format!(
                 "get run failed ({status}): {body}"
             )));
         }
 
         resp.json()
             .await
-            .map_err(|e| AutoForgeError::CursorApi(e.to_string()))
+            .map_err(|e| AutoForgeError::AgentApi(e.to_string()))
     }
 
     pub async fn wait_for_run(
@@ -212,12 +215,12 @@ impl CursorClient {
         }
     }
 
-    /// Cursor Cloud Agents API 연결 확인 (GET /v1/models)
+    /// 에이전트 API 연결 확인 (GET /v1/models)
     pub async fn health_check(&self) -> std::result::Result<(), String> {
         let resp = self
             .http
-            .get(format!("{CURSOR_API_BASE}/v1/models"))
-            .basic_auth(&self.api_key, Some(""))
+            .get(format!("{}/v1/models", self.base_url))
+            .bearer_auth(&self.api_key)
             .timeout(Duration::from_secs(15))
             .send()
             .await
@@ -232,20 +235,20 @@ impl CursorClient {
         }
     }
 
-    /// 사용 가능한 Cursor 모델 목록
-    pub async fn list_models(&self) -> Result<Vec<CursorModelInfo>> {
+    /// 설정된 base_url에서 사용 가능한 모델 목록을 자동으로 가져온다
+    pub async fn list_models(&self) -> Result<Vec<AgentModelInfo>> {
         let resp = self
             .http
-            .get(format!("{CURSOR_API_BASE}/v1/models"))
-            .basic_auth(&self.api_key, Some(""))
+            .get(format!("{}/v1/models", self.base_url))
+            .bearer_auth(&self.api_key)
             .send()
             .await
-            .map_err(|e| AutoForgeError::CursorApi(e.to_string()))?;
+            .map_err(|e| AutoForgeError::AgentApi(e.to_string()))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(AutoForgeError::CursorApi(format!(
+            return Err(AutoForgeError::AgentApi(format!(
                 "list models failed ({status}): {body}"
             )));
         }
@@ -253,7 +256,7 @@ impl CursorClient {
         let value: serde_json::Value = resp
             .json()
             .await
-            .map_err(|e| AutoForgeError::CursorApi(e.to_string()))?;
+            .map_err(|e| AutoForgeError::AgentApi(e.to_string()))?;
 
         let models = if let Some(arr) = value.get("models").and_then(|v| v.as_array()) {
             parse_model_array(arr)
@@ -270,7 +273,7 @@ impl CursorClient {
         }
     }
 
-    pub fn fallback_models() -> Vec<CursorModelInfo> {
+    pub fn fallback_models() -> Vec<AgentModelInfo> {
         [
             ("claude-haiku-4-5", "Claude Haiku 4.5"),
             ("claude-4.6-sonnet-high-thinking", "Claude Sonnet 4.6"),
@@ -281,7 +284,7 @@ impl CursorClient {
             ("composer-2.5", "Composer 2.5"),
         ]
         .into_iter()
-        .map(|(id, name)| CursorModelInfo {
+        .map(|(id, name)| AgentModelInfo {
             id: id.into(),
             name: Some(name.into()),
         })
@@ -289,7 +292,7 @@ impl CursorClient {
     }
 }
 
-fn parse_model_array(arr: &[serde_json::Value]) -> Vec<CursorModelInfo> {
+fn parse_model_array(arr: &[serde_json::Value]) -> Vec<AgentModelInfo> {
     arr.iter()
         .filter_map(|item| {
             let id = item
@@ -301,7 +304,7 @@ fn parse_model_array(arr: &[serde_json::Value]) -> Vec<CursorModelInfo> {
                 .or_else(|| item.get("displayName"))
                 .and_then(|v| v.as_str())
                 .map(String::from);
-            Some(CursorModelInfo {
+            Some(AgentModelInfo {
                 id: id.to_string(),
                 name,
             })

@@ -4,7 +4,9 @@ use std::env;
 pub struct Config {
     pub host: String,
     pub port: u16,
-    pub cursor_api_key: String,
+    pub agent_api_key: String,
+    /// 에이전트 실행 API의 base URL (예: https://api.cursor.com)
+    pub agent_api_base_url: String,
     pub stitch_api_key: String,
     /// 파이프라인 산출물 및 이미지 호스팅 파일을 저장할 로컬 디렉터리
     pub artifacts_dir: String,
@@ -47,7 +49,8 @@ impl Config {
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(8080),
-            cursor_api_key: env::var("CURSOR_API_KEY").unwrap_or_default(),
+            agent_api_key: env::var("AGENT_API_KEY").unwrap_or_default(),
+            agent_api_base_url: env::var("AGENT_API_BASE_URL").unwrap_or_default(),
             stitch_api_key: env::var("STITCH_API_KEY").unwrap_or_default(),
             artifacts_dir: env::var("ARTIFACTS_DIR").unwrap_or_else(|_| "./data/artifacts".into()),
             max_image_bytes: env::var("MAX_IMAGE_BYTES")
@@ -129,8 +132,8 @@ impl Config {
     /// 필수/권장 설정 누락을 점검하고 경고를 남긴다. 서버는 계속 기동하되
     /// 운영자가 로그에서 즉시 문제를 인지할 수 있도록 한다.
     pub fn validate_and_warn(&self) {
-        if self.cursor_api_key.is_empty() {
-            tracing::warn!("CURSOR_API_KEY is not set — Summarize/Architect/Implement/Verify/Debug stages will fail");
+        if self.agent_api_key.is_empty() || self.agent_api_base_url.is_empty() {
+            tracing::warn!("AGENT_API_KEY/AGENT_API_BASE_URL is not set — Summarize/Architect/Implement/Verify/Debug/SecurityPatch stages will fail");
         }
         if self.stitch_api_key.is_empty() {
             tracing::warn!("STITCH_API_KEY is not set — Design stage will fail");
