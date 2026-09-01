@@ -77,6 +77,10 @@ jobs:
     env:
       HOST_HTTP_PORT: "8080"
       PUBLIC_URL: http://localhost:8080
+      API_KEY: smoke-test-api-key
+      LOGIN_USERNAME: smoke
+      LOGIN_PASSWORD: smoke-pass-123
+      SESSION_SECRET: smoke-test-session-secret-0123456789abcdef
     steps:
       - uses: actions/checkout@v4
 
@@ -100,12 +104,37 @@ jobs:
           docker compose -f compose.yml logs
           exit 1
 
-      - name: Smoke test endpoints
+      - name: Smoke test endpoints (auth enabled)
         run: |
+          # 공개 엔드포인트
           curl -sf http://localhost:8080/health | tee /dev/stderr | grep -q '"status"'
           curl -sf http://localhost:8080/ready | tee /dev/stderr | grep -q '"status"'
-          curl -sf http://localhost:8080/v1/projects | tee /dev/stderr | grep -q '\[\]'
-          curl -sf http://localhost:8080/v1/models | tee /dev/stderr | grep -q '"models"'
+
+          # 인증 상태 확인 — 세션 로그인 활성화 여부
+          curl -sf http://localhost:8080/v1/auth/me | tee /dev/stderr | grep -q '"session_login_enabled":true'
+
+          # 미인증 API는 401이어야 한다
+          if curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/projects | grep -q '401'; then
+            echo "OK: unauthenticated /v1/projects -> 401"
+          else
+            echo "FAIL: unauthenticated /v1/projects should be 401" >&2
+            exit 1
+          fi
+
+          # 세션 로그인 → 쿠키 획득
+          rm -f /tmp/autoforge-cookies.txt
+          curl -sf -c /tmp/autoforge-cookies.txt -X POST http://localhost:8080/v1/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"smoke","password":"smoke-pass-123"}' | tee /dev/stderr | grep -q '"ok":true'
+
+          # 로그인 후 인증 엔드포인트 접근 → 200 + 빈 목록
+          curl -sf -b /tmp/autoforge-cookies.txt http://localhost:8080/v1/projects | tee /dev/stderr | grep -q '\[\]'
+          curl -sf -b /tmp/autoforge-cookies.txt http://localhost:8080/v1/models | tee /dev/stderr | grep -q '"models"'
+
+          # API_KEY Bearer 인증도 동작해야 한다
+          curl -sf -H "Authorization: Bearer $API_KEY" http://localhost:8080/v1/projects | tee /dev/stderr | grep -q '\[\]'
+
+          echo "All auth smoke tests passed"
 
       - name: Dump logs on failure
         if: failure()
