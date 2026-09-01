@@ -150,7 +150,7 @@ pub async fn readiness(app: &App) -> HealthReport {
             skipped("AGENT_API_KEY/AGENT_API_BASE_URL not configured"),
         );
     } else {
-let agent = app.agent.clone();
+        let agent = app.agent.clone();
         let (k, mut v) = timed_check("agent_api", || {
             let agent = agent.clone();
             async move { agent.health_check().await }

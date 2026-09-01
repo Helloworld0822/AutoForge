@@ -178,7 +178,7 @@ impl StageExecutor for SummarizeExecutor {
 
         Ok(StageOutput {
             artifacts: vec![artifact],
-metadata: serde_json::json!({
+            metadata: serde_json::json!({
                 "agent_id": resp.agent.id,
                 "programming_language": resolved.as_str(),
             }),
@@ -249,7 +249,7 @@ impl StageExecutor for ArchitectExecutor {
             .collect();
 
         Ok(StageOutput {
-artifacts: vec![draft],
+            artifacts: vec![draft],
             metadata: serde_json::json!({
                 "phase": "draft",
                 "agent_id": resp.agent.id,
@@ -737,12 +737,12 @@ async fn run_architect_finalize_with_answers(
     let profile = ctx.model_config.profile_for(StageId::Architect);
 
     let resp = ctx
-        .cursor
+        .agent
         .create_agent(&prompt, &profile, CreateAgentOpts::default())
         .await?;
 
     let run = ctx
-        .cursor
+        .agent
         .wait_for_run(
             &resp.agent.id,
             &resp.run.id,
@@ -765,7 +765,7 @@ async fn run_architect_finalize_with_answers(
         artifacts: vec![spec],
         metadata: serde_json::json!({
             "phase": "finalize",
-            "cursor_agent_id": resp.agent.id,
+            "agent_id": resp.agent.id,
         }),
     })
 }
