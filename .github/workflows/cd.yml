@@ -94,3 +94,57 @@ jobs:
           name: compose-prod-overlay
           path: compose.prod.yml
           retention-days: 30
+
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency: autoforge-deploy
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate production compose overlay
+        run: |
+          cat > compose.prod.yml <<'EOF'
+          services:
+            api:
+              image: ${IMAGE_PREFIX}autoforge-api:latest
+              pull_policy: always
+            orchestrator:
+              image: ${IMAGE_PREFIX}autoforge-api:latest
+              pull_policy: always
+            worker:
+              image: ${IMAGE_PREFIX}autoforge-api:latest
+              pull_policy: always
+            nginx:
+              image: ${IMAGE_PREFIX}autoforge-nginx:latest
+              pull_policy: always
+          EOF
+
+      - name: Copy files to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || '22' }}
+          source: "compose.yml,compose.prod.yml,scripts/remote-deploy.sh"
+          target: ${{ secrets.VPS_DEPLOY_DIR }}
+
+      - name: Run remote deploy
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          VPS_DEPLOY_DIR: ${{ secrets.VPS_DEPLOY_DIR }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || '22' }}
+          envs: VPS_DEPLOY_DIR,IMAGE_PREFIX
+          script: |
+            set -e
+            export DEPLOY_DIR="$VPS_DEPLOY_DIR"
+            export IMAGE_PREFIX
+            bash scripts/remote-deploy.sh
