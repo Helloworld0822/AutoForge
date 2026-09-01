@@ -145,6 +145,38 @@ curl -X POST http://localhost/v1/images \
 서버 기동 시 누락되거나 위험한 설정(예: `API_KEY` 미설정, `CURSOR_API_KEY` 비어있음)은
 로그에 경고로 출력됩니다.
 
+## GitHub Actions CI/CD 배포
+
+| 워크플로우 | 트리거 | 역할 |
+|-----------|--------|------|
+| `ci.yml` | PR / push → `main` | Rust fmt·clippy·test·build, Frontend lint·build, Compose smoke test |
+| `cd.yml` | push → `main` | ghcr.io 이미지 빌드·푸시(`latest`+sha) → **SSH로 VPS 자동 배포** |
+
+### 배포 흐름 (cd.yml)
+
+```
+main push → build-and-push (ghcr.io) 
+         → deploy (SSH)  compose.yml + compose.prod.yml + remote-deploy.sh 복사
+                        → remote-deploy.sh: pull → up -d --remove-orphans → prune
+```
+
+VPS에는 Docker Engine + compose plugin이 설치되어 있고 `/opt/autoforge`(기본
+`VPS_DEPLOY_DIR`)에 `compose.yml`, `compose.prod.yml`, `.env`(민감값 — 로그인/API 키)가
+사전 배치되어 있어야 합니다. `.env`는 서버에 고정 보관하며 배포 job은 이미지만 갱신합니다.
+
+### 필요 GitHub Secrets
+
+| Secret | 설명 |
+|--------|------|
+| `VPS_HOST` | 배포 대상 VPS IP/도메인 |
+| `VPS_USER` | SSH 사용자 |
+| `VPS_SSH_KEY` | SSH **프라이빗 키** (서버의 공개키와 쌍) |
+| `VPS_PORT` | SSH 포트 (기본 22, 생략 가능) |
+| `VPS_DEPLOY_DIR` | VPS 배포 디렉터리 (예: `/opt/autoforge`) |
+
+수동 배포: `gh workflow run cd.yml` 또는 VPS에서 직접
+`cd /opt/autoforge && IMAGE_PREFIX=ghcr.io/<owner>/ bash scripts/remote-deploy.sh`
+
 ## 운영 환경 체크리스트
 
 실사용(프로덕션) 배포 전 최소한 아래 항목을 확인하세요.
