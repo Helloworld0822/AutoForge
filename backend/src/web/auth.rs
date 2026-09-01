@@ -102,8 +102,10 @@ pub async fn require_auth<B: MessageBody + 'static>(
             .and_then(|v| v.strip_prefix("Bearer "))
             .map(str::trim);
 
-        if provided == Some(expected_key) {
-            return next.call(req).await.map(|res| res.map_into_left_body());
+        if let Some(provided_key) = provided {
+            if credentials_match(provided_key, expected_key) {
+                return next.call(req).await.map(|res| res.map_into_left_body());
+            }
         }
     }
 
@@ -124,7 +126,12 @@ pub async fn login(
         }));
     }
 
-    let expected_user = app.config.login_username.as_deref().unwrap_or_default();
+    let expected_user = app
+        .config
+        .login_username
+        .as_deref()
+        .unwrap_or_default()
+        .trim();
     let expected_pass = app.config.login_password.as_deref().unwrap_or_default();
 
     if !verify_login(

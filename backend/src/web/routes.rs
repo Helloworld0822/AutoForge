@@ -13,11 +13,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(
             web::scope("/v1")
                 .route("/auth/login", web::post().to(login))
+                .route("/auth/logout", web::post().to(logout))
                 .route("/auth/me", web::get().to(auth_me))
                 .service(
                     web::scope("")
                         .wrap(from_fn(require_auth))
-                        .route("/auth/logout", web::post().to(logout))
                         .route("/images", web::post().to(handlers::upload_image))
                         .route("/images", web::get().to(handlers::list_images))
                         .route("/models", web::get().to(handlers::list_models))
