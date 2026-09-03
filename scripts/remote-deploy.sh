@@ -19,11 +19,13 @@
 #   DEPLOY_DIR     compose 파일이 있는 디렉터리 (기본: /opt/autoforge)
 #   IMAGE_PREFIX   ghcr.io 앞 prefix (예: ghcr.io/your-org/) — compose.prod.yml 과 함께 사용
 #   COMPOSE_PROD   production overlay 파일명 (기본: compose.prod.yml)
+#   PRUNE_IMAGES   "1"이면 24h 경과 이미지 자동 정리 (기본: 정리 안 함 — 롤백용 이전 태그 보존)
 set -euo pipefail
 
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/autoforge}"
 COMPOSE_PROD="${COMPOSE_PROD:-compose.prod.yml}"
 IMAGE_PREFIX="${IMAGE_PREFIX:-ghcr.io/}"
+PRUNE_IMAGES="${PRUNE_IMAGES:-0}"
 
 cd "${DEPLOY_DIR}"
 
@@ -53,8 +55,10 @@ export IMAGE_PREFIX
 # 2. 변경된 서비스 재생성 (volumes/DB 유지)
 "${COMPOSE_ARGS[@]}" up -d --remove-orphans
 
-# 3. 이전 컨테이너 이미지 정리 (디스크 부족 방지)
-docker image prune -f --filter "until=24h" || true
+# 3. 이전 컨테이너 이미지 정리 (선택) — 롤백하려면 PRUNE_IMAGES=0 유지
+if [[ "${PRUNE_IMAGES}" == "1" ]]; then
+  docker image prune -f --filter "until=24h" || true
+fi
 
 echo "==> Deploy complete."
 echo ""

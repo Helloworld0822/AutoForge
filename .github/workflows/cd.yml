@@ -147,4 +147,5 @@ jobs:
             set -e
             export DEPLOY_DIR="$VPS_DEPLOY_DIR"
             export IMAGE_PREFIX
+            cd "$VPS_DEPLOY_DIR"
             bash scripts/remote-deploy.sh
