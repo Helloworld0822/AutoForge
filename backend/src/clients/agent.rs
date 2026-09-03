@@ -160,6 +160,28 @@ impl AgentClient {
         })
     }
 
+    async fn request(&self, path: &str, action: &str) -> Result<serde_json::Value> {
+        let resp = self
+            .http
+            .get(format!("{}{}", self.base_url, path))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .map_err(|e| AutoForgeError::AgentApi(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AutoForgeError::AgentApi(format!(
+                "{action} failed ({status}): {body}"
+            )));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| AutoForgeError::AgentApi(e.to_string()))
+    }
+
     #[instrument(skip(self, prompt_text, opts), fields(model = %profile.model_id))]
     pub async fn create_agent(
         &self,
@@ -216,28 +238,10 @@ impl AgentClient {
     }
 
     pub async fn get_run(&self, agent_id: &str, run_id: &str) -> Result<GetRunResponse> {
-        let resp = self
-            .http
-            .get(format!(
-                "{}/v1/agents/{agent_id}/runs/{run_id}",
-                self.base_url
-            ))
-            .bearer_auth(&self.api_key)
-            .send()
-            .await
-            .map_err(|e| AutoForgeError::AgentApi(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(AutoForgeError::AgentApi(format!(
-                "get run failed ({status}): {body}"
-            )));
-        }
-
-        resp.json()
-            .await
-            .map_err(|e| AutoForgeError::AgentApi(e.to_string()))
+        let path = format!("/v1/agents/{agent_id}/runs/{run_id}");
+        let value = self.request(&path, "get run").await?;
+        serde_json::from_value(value)
+            .map_err(|e| AutoForgeError::AgentApi(format!("get run response invalid: {e}")))
     }
 
     pub async fn wait_for_run(
@@ -277,26 +281,7 @@ impl AgentClient {
 
     /// 설정된 base_url에서 사용 가능한 모델 목록을 자동으로 가져온다
     pub async fn list_models(&self) -> Result<Vec<AgentModelInfo>> {
-        let resp = self
-            .http
-            .get(format!("{}/v1/models", self.base_url))
-            .bearer_auth(&self.api_key)
-            .send()
-            .await
-            .map_err(|e| AutoForgeError::AgentApi(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(AutoForgeError::AgentApi(format!(
-                "list models failed ({status}): {body}"
-            )));
-        }
-
-        let value: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| AutoForgeError::AgentApi(e.to_string()))?;
+        let value = self.request("/v1/models", "list models").await?;
 
         let models = if let Some(arr) = value.get("items").and_then(|v| v.as_array()) {
             parse_model_array(arr)
