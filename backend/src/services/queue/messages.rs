@@ -2,7 +2,7 @@ use crate::domain::{ArtifactRef, StageCommand, StageId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Redis Streams 커맨드 큐 메시지
+/// RabbitMQ 커맨드 큐 메시지
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueCommand {
     pub project_id: Uuid,

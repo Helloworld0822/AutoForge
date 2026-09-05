@@ -1,11 +1,15 @@
+pub mod architecture_qa;
 pub mod artifacts;
 pub mod daily_log;
 pub mod daily_log_notify;
 pub mod github;
 pub mod health;
 pub mod ingest;
+pub mod language;
 pub mod orchestrator;
 pub mod pipeline;
+pub mod project_git;
+pub mod project_watch;
 pub mod quality;
 pub mod queue;
 pub mod store;

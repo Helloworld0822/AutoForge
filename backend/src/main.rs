@@ -18,7 +18,7 @@ enum Commands {
         #[arg(long, env = "PORT")]
         port: Option<u16>,
     },
-    /// Redis Streams 커맨드 워커 (Podman 스케일아웃)
+    /// RabbitMQ 커맨드 워커 (Podman 스케일아웃)
     Worker {
         #[arg(long, env = "STAGE_FILTER")]
         stage_filter: Option<String>,

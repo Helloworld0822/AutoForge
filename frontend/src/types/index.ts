@@ -1,4 +1,34 @@
-export type PipelineState = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type PipelineState =
+  | 'pending'
+  | 'running'
+  | 'awaiting_input'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type LanguageMode = 'auto' | 'manual';
+
+export type ProgrammingLanguage =
+  | 'rust'
+  | 'typescript'
+  | 'python'
+  | 'go'
+  | 'java'
+  | 'kotlin'
+  | 'swift'
+  | 'csharp'
+  | 'ruby'
+  | 'php';
+
+export interface ArchitectureClarification {
+  id: string;
+  question: string;
+  options: string[];
+  required: boolean;
+  category?: string | null;
+  answer?: string | null;
+  answered_at?: string | null;
+}
 
 export type StageId =
   | 'ingest'
@@ -18,6 +48,14 @@ export interface StageStatus {
   status: StageState;
 }
 
+export interface ActivityEntry {
+  at: string;
+  event: string;
+  stage?: StageId;
+  message: string;
+  progress_percent: number;
+}
+
 export interface Project {
   id: string;
   name: string | null;
@@ -25,10 +63,18 @@ export interface Project {
   state: PipelineState;
   stages: StageStatus[];
   progress_percent: number;
+  current_stage?: StageId | null;
+  last_error?: string | null;
+  recent_activity?: ActivityEntry[];
   pr_url: string | null;
   merge_status: string | null;
   github_repo: string | null;
   has_devops_plan: boolean;
+  programming_language: string | null;
+  resolved_language: string | null;
+  language_mode: LanguageMode;
+  awaiting_architecture_input: boolean;
+  architecture_clarifications: ArchitectureClarification[];
   model_config?: PipelineModelConfig;
   created_at: string;
 }
@@ -63,6 +109,7 @@ export interface CreateProjectResponse {
   message: string;
   mode: string;
   stream_url: string;
+  ws_url: string;
   progress_percent: number;
   github_auto_created: boolean;
   has_devops_plan: boolean;
@@ -79,6 +126,13 @@ export interface UploadImageResponse {
   filename: string;
   url: string;
   content_type: string;
+}
+
+export interface AuthMeResponse {
+  authenticated: boolean;
+  username: string | null;
+  session_login_enabled: boolean;
+  api_key_enabled: boolean;
 }
 
 export interface HealthResponse {
@@ -98,6 +152,8 @@ export interface PipelineModelConfig {
   debug?: string;
   security_patch?: string;
   design_device_type?: string;
+  design_source?: 'stitch' | 'figma';
+  figma_file_url?: string;
 }
 
 export interface AgentModel {
@@ -125,7 +181,7 @@ export const STAGE_META: Record<
     description: '시스템 아키텍처 & 상세 기획',
     model: 'Sonnet',
   },
-  design: { label: 'Design', description: 'UI 디자인 생성', model: 'Stitch' },
+  design: { label: 'Design', description: 'UI 디자인 (Stitch 또는 Figma)', model: 'Stitch / Figma' },
   implement: {
     label: 'Implement',
     description: '코드 구현 & PR 생성',

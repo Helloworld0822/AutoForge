@@ -49,10 +49,11 @@ const STAGE_FIELDS: {
 interface ModelConfigPanelProps {
   value: PipelineModelConfig;
   onChange: (value: PipelineModelConfig) => void;
+  defaultExpanded?: boolean;
 }
 
-export function ModelConfigPanel({ value, onChange }: ModelConfigPanelProps) {
-  const [expanded, setExpanded] = useState(false);
+export function ModelConfigPanel({ value, onChange, defaultExpanded = false }: ModelConfigPanelProps) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [models, setModels] = useState<AgentModel[]>([]);
   const [defaults, setDefaults] = useState<PipelineModelConfig>({});
   const [loading, setLoading] = useState(false);
@@ -138,20 +139,60 @@ export function ModelConfigPanel({ value, onChange }: ModelConfigPanelProps) {
             ))}
           </div>
 
-          <label className="block text-sm sm:max-w-xs">
-            <span className="font-medium text-foreground">Design (Stitch)</span>
-            <span className="mb-1.5 block text-xs text-muted">UI 디자인 디바이스 타입</span>
-            <select
-              value={value.design_device_type ?? 'DESKTOP'}
-              onChange={(e) =>
-                onChange({ ...value, design_device_type: e.target.value })
-              }
-              className="w-full rounded-lg border border-border bg-surface-container-lowest px-3 py-2 text-sm outline-none focus:border-accent"
-            >
-              <option value="DESKTOP">Desktop</option>
-              <option value="MOBILE">Mobile</option>
-            </select>
-          </label>
+          <div className="space-y-4 rounded-lg border border-border/60 bg-surface-container-lowest/40 p-4">
+            <label className="block text-sm sm:max-w-xs">
+              <span className="font-medium text-foreground">Design 소스</span>
+              <span className="mb-1.5 block text-xs text-muted">
+                Stitch AI 생성 또는 기존 Figma 파일에서 UI 참고 자료 추출
+              </span>
+              <select
+                value={value.design_source ?? 'stitch'}
+                onChange={(e) =>
+                  onChange({
+                    ...value,
+                    design_source: e.target.value as 'stitch' | 'figma',
+                  })
+                }
+                className="w-full rounded-lg border border-border bg-surface-container-lowest px-3 py-2 text-sm outline-none focus:border-accent"
+              >
+                <option value="stitch">Stitch (AI 생성)</option>
+                <option value="figma">Figma (디자인 파일)</option>
+              </select>
+            </label>
+
+            {(value.design_source ?? 'stitch') === 'stitch' ? (
+              <label className="block text-sm sm:max-w-xs">
+                <span className="font-medium text-foreground">Stitch 디바이스</span>
+                <span className="mb-1.5 block text-xs text-muted">UI 디자인 디바이스 타입</span>
+                <select
+                  value={value.design_device_type ?? 'DESKTOP'}
+                  onChange={(e) =>
+                    onChange({ ...value, design_device_type: e.target.value })
+                  }
+                  className="w-full rounded-lg border border-border bg-surface-container-lowest px-3 py-2 text-sm outline-none focus:border-accent"
+                >
+                  <option value="DESKTOP">Desktop</option>
+                  <option value="MOBILE">Mobile</option>
+                </select>
+              </label>
+            ) : (
+              <label className="block text-sm">
+                <span className="font-medium text-foreground">Figma 파일 URL</span>
+                <span className="mb-1.5 block text-xs text-muted">
+                  figma.com/design/... 또는 frame URL (node-id 포함 권장)
+                </span>
+                <input
+                  type="url"
+                  value={value.figma_file_url ?? ''}
+                  onChange={(e) =>
+                    onChange({ ...value, figma_file_url: e.target.value || undefined })
+                  }
+                  placeholder="https://www.figma.com/design/..."
+                  className="w-full rounded-lg border border-border bg-surface-container-lowest px-3 py-2 text-sm outline-none focus:border-accent"
+                />
+              </label>
+            )}
+          </div>
 
           <button
             type="button"
@@ -172,6 +213,10 @@ export function resolveStageModel(
   defaults?: PipelineModelConfig,
 ): string | undefined {
   if (stage === 'design') {
+    const source = config?.design_source ?? defaults?.design_source ?? 'stitch';
+    if (source === 'figma') {
+      return 'Figma';
+    }
     const device = config?.design_device_type ?? defaults?.design_device_type ?? 'DESKTOP';
     return `Stitch (${device})`;
   }

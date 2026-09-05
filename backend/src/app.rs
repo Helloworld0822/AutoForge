@@ -1,11 +1,13 @@
 use crate::clients::github::GitHubClient;
 use crate::clients::slack::SlackNotifier;
 use crate::config::Config;
-use crate::domain::{PipelineModelConfig, PipelineState, Project, ProjectId, StageId, StageState};
+use crate::domain::{PipelineState, Project, ProjectId, StageId, StageState};
 use crate::services::artifacts::{ArtifactStore, LocalArtifactStore};
 use crate::services::orchestrator::DagScheduler;
+use crate::services::project_git::ProjectGitSync;
+use crate::services::project_watch::ProjectWatch;
 use crate::services::queue::MessageQueue;
-use crate::services::store::{MemoryStore, ProjectStore, RedisProjectStore};
+use crate::services::store::{MemoryStore, NotifyingStore, ProjectStore, RedisProjectStore};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -18,34 +20,42 @@ pub struct App {
     pub media: Arc<LocalArtifactStore>,
     pub agent: Arc<crate::clients::agent::AgentClient>,
     pub stitch: Arc<crate::clients::stitch::StitchClient>,
+    pub figma: Arc<crate::clients::figma::FigmaClient>,
     pub queue: Option<Arc<MessageQueue>>,
     pub slack: Option<Arc<SlackNotifier>>,
     pub github: Option<Arc<GitHubClient>>,
+    pub watch: Arc<ProjectWatch>,
+    pub project_git: Option<Arc<ProjectGitSync>>,
 }
 
 impl App {
     /// 인메모리 모드 (단일 프로세스, MQ 없음)
     pub async fn new(config: Config) -> crate::Result<Self> {
-        let store: Arc<dyn ProjectStore> = Arc::new(MemoryStore::new());
-        Self::build(config, store, None, None).await
+        let watch = Arc::new(ProjectWatch::memory());
+        let inner: Arc<dyn ProjectStore> = Arc::new(MemoryStore::new());
+        let store: Arc<dyn ProjectStore> = Arc::new(NotifyingStore::new(inner, watch.clone()));
+        Self::build(config, store, watch, None, None).await
     }
 
     /// Redis MQ 모드 (Podman 멀티 컨테이너)
     pub async fn connect(config: Config) -> crate::Result<Self> {
-        let store: Arc<dyn ProjectStore> =
+        let watch = Arc::new(ProjectWatch::redis(config.redis_url.clone()));
+        let inner: Arc<dyn ProjectStore> =
             Arc::new(RedisProjectStore::connect(&config.redis_url).await?);
+        let store: Arc<dyn ProjectStore> = Arc::new(NotifyingStore::new(inner, watch.clone()));
         let queue = Some(MessageQueue::connect(&config).await?);
         let slack = if config.slack_enabled() {
             Some(Arc::new(SlackNotifier::new(&config)?))
         } else {
             None
         };
-        Self::build(config, store, queue, slack).await
+        Self::build(config, store, watch, queue, slack).await
     }
 
     async fn build(
         config: Config,
         store: Arc<dyn ProjectStore>,
+        watch: Arc<ProjectWatch>,
         queue: Option<Arc<MessageQueue>>,
         slack: Option<Arc<SlackNotifier>>,
     ) -> crate::Result<Self> {
@@ -55,6 +65,11 @@ impl App {
         )?);
         let stitch = Arc::new(crate::clients::stitch::StitchClient::new(
             config.stitch_api_key.clone(),
+            config.stitch_access_token.clone(),
+            config.google_cloud_project.clone(),
+        )?);
+        let figma = Arc::new(crate::clients::figma::FigmaClient::new(
+            config.figma_access_token.clone(),
         )?);
         let media = Arc::new(LocalArtifactStore::new(
             &config.artifacts_dir,
@@ -82,6 +97,16 @@ impl App {
             None
         };
 
+        let project_git = if config.git_auto_commit {
+            Some(Arc::new(ProjectGitSync::new(
+                config.artifacts_dir.clone(),
+                config.github_token.clone(),
+                config.git_daily_push_hour_utc,
+            )))
+        } else {
+            None
+        };
+
         Ok(Self {
             config,
             store,
@@ -89,9 +114,12 @@ impl App {
             media,
             agent,
             stitch,
+            figma,
             queue,
             slack,
             github,
+            watch,
+            project_git,
         })
     }
 
@@ -99,7 +127,9 @@ impl App {
         &self,
         name: Option<String>,
         repo_url: Option<String>,
-        model_config: PipelineModelConfig,
+        programming_language: Option<crate::domain::ProgrammingLanguage>,
+        language_mode: crate::domain::LanguageMode,
+        model_config: crate::domain::PipelineModelConfig,
     ) -> Project {
         let id = ProjectId::new();
         let project = Project {
@@ -114,6 +144,10 @@ impl App {
             scheduler: DagScheduler::with_quality(id, self.config.max_debug_cycles),
             pdf_bytes: None,
             devops_plan: None,
+            programming_language,
+            language_mode,
+            resolved_language: None,
+            architecture_clarifications: Vec::new(),
             stage_outputs: HashMap::new(),
             accumulated_artifacts: Vec::new(),
             slack_message_ts: None,

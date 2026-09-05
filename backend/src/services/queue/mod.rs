@@ -4,88 +4,214 @@ use self::messages::{PipelineEvent, QueueCommand};
 use crate::config::Config;
 use crate::domain::StageCommand;
 use crate::error::{AutoForgeError, Result};
-use redis::aio::ConnectionManager;
+use dashmap::DashMap;
+use lapin::{
+    options::{
+        BasicAckOptions, BasicGetOptions, BasicNackOptions, BasicPublishOptions,
+        ExchangeDeclareOptions, QueueBindOptions, QueueDeclareOptions,
+    },
+    types::{AMQPValue, FieldTable, LongString},
+    BasicProperties, Channel, Connection, ConnectionProperties,
+};
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 use tracing::{debug, info};
+use uuid::Uuid;
 
 pub use messages::{PipelineEvent as Event, QueueCommand as Command};
 
-pub struct MessageQueue {
-    conn: ConnectionManager,
-    pub commands_stream: String,
-    pub events_stream: String,
-    pub consumer_group: String,
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const CONNECT_RETRY_DELAY: Duration = Duration::from_secs(2);
+const MAX_CONNECT_ATTEMPTS: u32 = 15;
+const EXCHANGE: &str = "autoforge";
+
+struct PendingAck {
+    delivery_tag: u64,
 }
 
-const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+pub struct MessageQueue {
+    publish_channel: Channel,
+    consume_channel: Arc<Mutex<Channel>>,
+    pub commands_stream: String,
+    pub events_stream: String,
+    commands_dlq: String,
+    events_dlq: String,
+    pub consumer_group: String,
+    pending: Arc<Mutex<HashMap<String, PendingAck>>>,
+    retries: Arc<DashMap<String, i64>>,
+}
 
 impl MessageQueue {
     pub async fn connect(config: &Config) -> Result<Arc<Self>> {
-        let client = redis::Client::open(config.redis_url.as_str())
-            .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
-        let conn = tokio::time::timeout(CONNECT_TIMEOUT, client.get_connection_manager())
+        let mut last_err = None;
+        for attempt in 1..=MAX_CONNECT_ATTEMPTS {
+            match Self::try_connect(config).await {
+                Ok(mq) => return Ok(mq),
+                Err(err) => {
+                    if attempt < MAX_CONNECT_ATTEMPTS {
+                        tracing::warn!(
+                            attempt,
+                            max = MAX_CONNECT_ATTEMPTS,
+                            error = %err,
+                            "rabbitmq connect failed; retrying in {CONNECT_RETRY_DELAY:?}"
+                        );
+                        tokio::time::sleep(CONNECT_RETRY_DELAY).await;
+                    }
+                    last_err = Some(err);
+                }
+            }
+        }
+
+        Err(last_err
+            .unwrap_or_else(|| AutoForgeError::Queue("failed to connect to RabbitMQ".into())))
+    }
+
+    async fn try_connect(config: &Config) -> Result<Arc<Self>> {
+        let connection = tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            Connection::connect(&config.rabbitmq_url, ConnectionProperties::default()),
+        )
+        .await
+        .map_err(|_| {
+            AutoForgeError::Queue(format!(
+                "timed out connecting to RabbitMQ at {} after {CONNECT_TIMEOUT:?}",
+                config.rabbitmq_url
+            ))
+        })?
+        .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
+
+        let publish_channel = connection
+            .create_channel()
             .await
-            .map_err(|_| {
-                AutoForgeError::Queue(format!(
-                    "timed out connecting to Redis at {} after {CONNECT_TIMEOUT:?}",
-                    config.redis_url
-                ))
-            })?
             .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
+        let consume_channel = connection
+            .create_channel()
+            .await
+            .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
+
+        let commands_stream = config.queue_commands_stream.clone();
+        let events_stream = config.queue_events_stream.clone();
+        let commands_dlq = format!("{commands_stream}.dlq");
+        let events_dlq = format!("{events_stream}.dlq");
 
         let mq = Arc::new(Self {
-            conn,
-            commands_stream: config.queue_commands_stream.clone(),
-            events_stream: config.queue_events_stream.clone(),
+            publish_channel,
+            consume_channel: Arc::new(Mutex::new(consume_channel)),
+            commands_stream,
+            events_stream,
+            commands_dlq,
+            events_dlq,
             consumer_group: config.queue_consumer_group.clone(),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            retries: Arc::new(DashMap::new()),
         });
 
-        mq.ensure_groups().await?;
+        mq.ensure_topology().await?;
         Ok(mq)
     }
 
     pub async fn ping(&self) -> Result<()> {
-        redis::cmd("PING")
-            .query_async::<String>(&mut self.conn.clone())
+        self.publish_channel
+            .queue_declare(
+                &self.commands_stream,
+                QueueDeclareOptions {
+                    passive: true,
+                    ..QueueDeclareOptions::default()
+                },
+                FieldTable::default(),
+            )
             .await
             .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
         Ok(())
     }
 
-    async fn ensure_groups(&self) -> Result<()> {
-        for stream in [&self.commands_stream, &self.events_stream] {
-            let result: redis::RedisResult<String> = redis::cmd("XGROUP")
-                .arg("CREATE")
-                .arg(stream)
-                .arg(&self.consumer_group)
-                .arg("0")
-                .arg("MKSTREAM")
-                .query_async(&mut self.conn.clone())
-                .await;
-            match result {
-                Ok(_) => info!(stream, group = %self.consumer_group, "consumer group created"),
-                Err(e) if e.to_string().contains("BUSYGROUP") => {
-                    debug!(stream, "consumer group already exists");
-                }
-                Err(e) => return Err(AutoForgeError::Queue(e.to_string())),
-            }
+    async fn ensure_topology(&self) -> Result<()> {
+        self.publish_channel
+            .exchange_declare(
+                EXCHANGE,
+                lapin::ExchangeKind::Direct,
+                ExchangeDeclareOptions {
+                    durable: true,
+                    ..ExchangeDeclareOptions::default()
+                },
+                FieldTable::default(),
+            )
+            .await
+            .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
+
+        for (queue, dlq) in [
+            (&self.commands_stream, &self.commands_dlq),
+            (&self.events_stream, &self.events_dlq),
+        ] {
+            self.declare_work_queue(queue, dlq).await?;
         }
+
+        info!(
+            commands = %self.commands_stream,
+            events = %self.events_stream,
+            exchange = EXCHANGE,
+            "rabbitmq topology ready"
+        );
+        Ok(())
+    }
+
+    async fn declare_work_queue(&self, queue: &str, dlq: &str) -> Result<()> {
+        let mut args = FieldTable::default();
+        args.insert(
+            "x-dead-letter-exchange".into(),
+            AMQPValue::LongString(LongString::from(EXCHANGE)),
+        );
+        args.insert(
+            "x-dead-letter-routing-key".into(),
+            AMQPValue::LongString(LongString::from(dlq.to_string())),
+        );
+
+        self.publish_channel
+            .queue_declare(
+                queue,
+                QueueDeclareOptions {
+                    durable: true,
+                    ..QueueDeclareOptions::default()
+                },
+                args,
+            )
+            .await
+            .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
+
+        self.publish_channel
+            .queue_declare(
+                dlq,
+                QueueDeclareOptions {
+                    durable: true,
+                    ..QueueDeclareOptions::default()
+                },
+                FieldTable::default(),
+            )
+            .await
+            .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
+
+        for routing_key in [queue, dlq] {
+            self.publish_channel
+                .queue_bind(
+                    routing_key,
+                    EXCHANGE,
+                    routing_key,
+                    QueueBindOptions::default(),
+                    FieldTable::default(),
+                )
+                .await
+                .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
+        }
+
         Ok(())
     }
 
     pub async fn enqueue_command(&self, cmd: &StageCommand) -> Result<String> {
         let payload = serde_json::to_string(&QueueCommand::from(cmd.clone()))
             .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
-        let id: String = redis::cmd("XADD")
-            .arg(&self.commands_stream)
-            .arg("*")
-            .arg("data")
-            .arg(&payload)
-            .query_async(&mut self.conn.clone())
-            .await
-            .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
-        debug!(%id, stage = ?cmd.stage, "command enqueued");
-        Ok(id)
+        self.publish(&self.commands_stream, &payload).await
     }
 
     pub async fn enqueue_commands(&self, cmds: &[StageCommand]) -> Result<()> {
@@ -98,15 +224,30 @@ impl MessageQueue {
     pub async fn publish_event(&self, event: &PipelineEvent) -> Result<String> {
         let payload =
             serde_json::to_string(event).map_err(|e| AutoForgeError::Queue(e.to_string()))?;
-        let id: String = redis::cmd("XADD")
-            .arg(&self.events_stream)
-            .arg("*")
-            .arg("data")
-            .arg(&payload)
-            .query_async(&mut self.conn.clone())
+        self.publish(&self.events_stream, &payload).await
+    }
+
+    async fn publish(&self, routing_key: &str, payload: &str) -> Result<String> {
+        let message_id = Uuid::new_v4().to_string();
+        let props = BasicProperties::default()
+            .with_message_id(message_id.clone().into())
+            .with_delivery_mode(2);
+
+        self.publish_channel
+            .basic_publish(
+                EXCHANGE,
+                routing_key,
+                BasicPublishOptions::default(),
+                payload.as_bytes(),
+                props,
+            )
+            .await
+            .map_err(|e| AutoForgeError::Queue(e.to_string()))?
             .await
             .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
-        Ok(id)
+
+        debug!(%message_id, routing_key, "message published");
+        Ok(message_id)
     }
 
     pub async fn read_commands(
@@ -115,7 +256,7 @@ impl MessageQueue {
         count: usize,
         block_ms: u64,
     ) -> Result<Vec<(String, QueueCommand)>> {
-        self.read_stream(&self.commands_stream, consumer, count, block_ms)
+        self.read_queue(&self.commands_stream, consumer, count, block_ms)
             .await
     }
 
@@ -125,145 +266,143 @@ impl MessageQueue {
         count: usize,
         block_ms: u64,
     ) -> Result<Vec<(String, PipelineEvent)>> {
-        self.read_stream(&self.events_stream, consumer, count, block_ms)
+        self.read_queue(&self.events_stream, consumer, count, block_ms)
             .await
     }
 
-    async fn read_stream<T: serde::de::DeserializeOwned>(
+    async fn read_queue<T: serde::de::DeserializeOwned>(
         &self,
-        stream: &str,
+        queue: &str,
         consumer: &str,
         count: usize,
         block_ms: u64,
     ) -> Result<Vec<(String, T)>> {
-        let result: redis::Value = redis::cmd("XREADGROUP")
-            .arg("GROUP")
-            .arg(&self.consumer_group)
-            .arg(consumer)
-            .arg("COUNT")
-            .arg(count)
-            .arg("BLOCK")
-            .arg(block_ms)
-            .arg("STREAMS")
-            .arg(stream)
-            .arg(">")
-            .query_async(&mut self.conn.clone())
-            .await
-            .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
+        let _ = consumer;
+        let mut out = Vec::new();
+        let deadline = Instant::now() + Duration::from_millis(block_ms);
 
-        Ok(parse_stream_messages(result))
+        while out.len() < count && Instant::now() < deadline {
+            let delivery = {
+                let channel = self.consume_channel.lock().await;
+                channel
+                    .basic_get(queue, BasicGetOptions { no_ack: false })
+                    .await
+                    .map_err(|e| AutoForgeError::Queue(e.to_string()))?
+            };
+
+            let Some(delivery) = delivery else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            };
+
+            let msg_id = delivery
+                .properties
+                .message_id()
+                .as_ref()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            let body = String::from_utf8_lossy(&delivery.data).to_string();
+
+            match serde_json::from_str::<T>(&body) {
+                Ok(parsed) => {
+                    self.pending.lock().await.insert(
+                        msg_id.clone(),
+                        PendingAck {
+                            delivery_tag: delivery.delivery_tag,
+                        },
+                    );
+                    out.push((msg_id, parsed));
+                }
+                Err(e) => {
+                    let channel = self.consume_channel.lock().await;
+                    channel
+                        .basic_nack(
+                            delivery.delivery_tag,
+                            BasicNackOptions {
+                                requeue: false,
+                                ..BasicNackOptions::default()
+                            },
+                        )
+                        .await
+                        .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
+                    return Err(AutoForgeError::Queue(format!(
+                        "invalid message payload on {queue}: {e}"
+                    )));
+                }
+            }
+        }
+
+        Ok(out)
     }
 
     pub async fn ack_command(&self, id: &str) -> Result<()> {
-        self.ack(&self.commands_stream, id).await
+        self.ack(id).await
     }
 
     pub async fn ack_event(&self, id: &str) -> Result<()> {
-        self.ack(&self.events_stream, id).await
+        self.ack(id).await
     }
 
-    async fn ack(&self, stream: &str, id: &str) -> Result<()> {
-        let _: i32 = redis::cmd("XACK")
-            .arg(stream)
-            .arg(&self.consumer_group)
-            .arg(id)
-            .query_async(&mut self.conn.clone())
+    async fn ack(&self, id: &str) -> Result<()> {
+        let pending =
+            self.pending.lock().await.remove(id).ok_or_else(|| {
+                AutoForgeError::Queue(format!("unknown message id for ack: {id}"))
+            })?;
+
+        let channel = self.consume_channel.lock().await;
+        channel
+            .basic_ack(pending.delivery_tag, BasicAckOptions::default())
             .await
             .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
         Ok(())
     }
 
-    /// 처리되지 않은 채 오래 대기 중인(min_idle_ms 이상) pending 메시지를 재소유하여
-    /// 재시도 대상으로 가져온다 (컨슈머 크래시 복구 + 실패 후 재시도).
+    pub async fn nack_for_requeue(&self, id: &str) -> Result<()> {
+        let pending =
+            self.pending.lock().await.remove(id).ok_or_else(|| {
+                AutoForgeError::Queue(format!("unknown message id for nack: {id}"))
+            })?;
+
+        let channel = self.consume_channel.lock().await;
+        channel
+            .basic_nack(
+                pending.delivery_tag,
+                BasicNackOptions {
+                    requeue: true,
+                    ..BasicNackOptions::default()
+                },
+            )
+            .await
+            .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
+        Ok(())
+    }
+
+    /// RabbitMQ는 컨슈머 장애 시 미승인 메시지를 자동 재큐잉한다.
     pub async fn claim_stale_events(
         &self,
-        consumer: &str,
-        min_idle_ms: i64,
-        count: usize,
+        _consumer: &str,
+        _min_idle_ms: i64,
+        _count: usize,
     ) -> Result<Vec<(String, PipelineEvent)>> {
-        self.claim_stale(&self.events_stream, consumer, min_idle_ms, count)
-            .await
+        Ok(vec![])
     }
 
     pub async fn claim_stale_commands(
         &self,
-        consumer: &str,
-        min_idle_ms: i64,
-        count: usize,
+        _consumer: &str,
+        _min_idle_ms: i64,
+        _count: usize,
     ) -> Result<Vec<(String, QueueCommand)>> {
-        self.claim_stale(&self.commands_stream, consumer, min_idle_ms, count)
-            .await
+        Ok(vec![])
     }
 
-    async fn claim_stale<T: serde::de::DeserializeOwned>(
-        &self,
-        stream: &str,
-        consumer: &str,
-        min_idle_ms: i64,
-        count: usize,
-    ) -> Result<Vec<(String, T)>> {
-        let result: redis::Value = redis::cmd("XAUTOCLAIM")
-            .arg(stream)
-            .arg(&self.consumer_group)
-            .arg(consumer)
-            .arg(min_idle_ms)
-            .arg("0-0")
-            .arg("COUNT")
-            .arg(count)
-            .query_async(&mut self.conn.clone())
-            .await
-            .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
-
-        let redis::Value::Array(parts) = result else {
-            return Ok(vec![]);
-        };
-        if parts.len() < 2 {
-            return Ok(vec![]);
-        }
-        let redis::Value::Array(messages) = &parts[1] else {
-            return Ok(vec![]);
-        };
-
-        let mut out = Vec::new();
-        for msg in messages {
-            let redis::Value::Array(msg_parts) = msg else {
-                continue;
-            };
-            if msg_parts.len() < 2 {
-                continue;
-            }
-            let id = match &msg_parts[0] {
-                redis::Value::BulkString(d) => String::from_utf8_lossy(d).to_string(),
-                redis::Value::SimpleString(s) => s.clone(),
-                _ => continue,
-            };
-            if let Some(data) = extract_data_field(&msg_parts[1]) {
-                if let Ok(parsed) = serde_json::from_str::<T>(&data) {
-                    out.push((id, parsed));
-                }
-            }
-        }
-        Ok(out)
-    }
-
-    /// 실패 재시도 횟수 카운터 (스트림+메시지 ID 단위, 24시간 TTL)
     pub async fn incr_retry(&self, stream: &str, id: &str) -> Result<i64> {
-        let key = format!("autoforge:retry:{stream}:{id}");
-        let mut conn = self.conn.clone();
-        let n: i64 = redis::cmd("INCR")
-            .arg(&key)
-            .query_async(&mut conn)
-            .await
-            .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
-        let _: std::result::Result<(), _> = redis::cmd("EXPIRE")
-            .arg(&key)
-            .arg(86_400)
-            .query_async::<()>(&mut conn)
-            .await;
-        Ok(n)
+        let key = format!("{stream}:{id}");
+        let mut entry = self.retries.entry(key).or_insert(0);
+        *entry += 1;
+        Ok(*entry)
     }
 
-    /// 최대 재시도 초과 메시지를 데드레터 스트림(`{stream}:dlq`)으로 이동
     pub async fn dead_letter(
         &self,
         stream: &str,
@@ -271,80 +410,17 @@ impl MessageQueue {
         payload: &str,
         error: &str,
     ) -> Result<()> {
-        let dlq_stream = format!("{stream}:dlq");
-        let _: String = redis::cmd("XADD")
-            .arg(&dlq_stream)
-            .arg("*")
-            .arg("original_id")
-            .arg(id)
-            .arg("error")
-            .arg(error)
-            .arg("data")
-            .arg(payload)
-            .query_async(&mut self.conn.clone())
-            .await
-            .map_err(|e| AutoForgeError::Queue(e.to_string()))?;
+        let dlq = if stream == self.commands_stream {
+            &self.commands_dlq
+        } else {
+            &self.events_dlq
+        };
+        let body = serde_json::json!({
+            "original_id": id,
+            "error": error,
+            "data": payload,
+        });
+        self.publish(dlq, &body.to_string()).await?;
         Ok(())
     }
-}
-
-fn parse_stream_messages<T: serde::de::DeserializeOwned>(value: redis::Value) -> Vec<(String, T)> {
-    let mut out = Vec::new();
-    let redis::Value::Array(streams) = value else {
-        return out;
-    };
-    for stream_entry in streams {
-        let redis::Value::Array(parts) = stream_entry else {
-            continue;
-        };
-        if parts.len() < 2 {
-            continue;
-        }
-        let redis::Value::Array(messages) = &parts[1] else {
-            continue;
-        };
-        for msg in messages {
-            let redis::Value::Array(msg_parts) = msg else {
-                continue;
-            };
-            if msg_parts.len() < 2 {
-                continue;
-            }
-            let id = match &msg_parts[0] {
-                redis::Value::BulkString(d) => String::from_utf8_lossy(d).to_string(),
-                redis::Value::SimpleString(s) => s.clone(),
-                _ => continue,
-            };
-            let data = extract_data_field(&msg_parts[1]);
-            if let Some(data) = data {
-                if let Ok(parsed) = serde_json::from_str::<T>(&data) {
-                    out.push((id, parsed));
-                }
-            }
-        }
-    }
-    out
-}
-
-fn extract_data_field(value: &redis::Value) -> Option<String> {
-    let redis::Value::Array(fields) = value else {
-        return None;
-    };
-    let mut iter = fields.iter();
-    while let Some(key) = iter.next() {
-        let val = iter.next()?;
-        let key_str = match key {
-            redis::Value::BulkString(d) => String::from_utf8_lossy(d),
-            redis::Value::SimpleString(s) => s.as_str().into(),
-            _ => continue,
-        };
-        if key_str == "data" {
-            return match val {
-                redis::Value::BulkString(d) => Some(String::from_utf8_lossy(d).to_string()),
-                redis::Value::SimpleString(s) => Some(s.clone()),
-                _ => None,
-            };
-        }
-    }
-    None
 }

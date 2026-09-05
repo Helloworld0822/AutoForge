@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { createProject } from '../api/client';
+import { createProject, PROGRAMMING_LANGUAGES } from '../api/client';
 import { ModelConfigPanel } from '../components/ModelConfigPanel';
-import type { PipelineModelConfig } from '../types';
+import type { LanguageMode, PipelineModelConfig, ProgrammingLanguage } from '../types';
 
 const DEVOPS_ACCEPT =
   '.md,.markdown,.yaml,.yml,.txt,.pdf,application/pdf,text/markdown,text/plain';
@@ -34,6 +34,9 @@ export function NewProjectPage() {
   const [file, setFile] = useState<File | null>(null);
   const [devopsFile, setDevopsFile] = useState<File | null>(null);
   const [devopsText, setDevopsText] = useState('');
+  const [languageMode, setLanguageMode] = useState<LanguageMode>('auto');
+  const [programmingLanguage, setProgrammingLanguage] =
+    useState<ProgrammingLanguage>('typescript');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -63,6 +66,9 @@ export function NewProjectPage() {
         repoUrl: repoUrl || undefined,
         devopsPlanText: devopsText || undefined,
         devopsPlanFile: devopsFile,
+        languageMode,
+        programmingLanguage:
+          languageMode === 'manual' ? programmingLanguage : undefined,
         modelConfig,
       });
       navigate(`/projects/${res.id}`);
@@ -148,6 +154,60 @@ export function NewProjectPage() {
               className="code-editor mt-2 block min-h-40 w-full resize-y rounded-lg border border-border bg-surface-container-lowest px-4 py-3 font-label text-sm leading-relaxed text-foreground outline-none focus:border-accent"
             />
           </label>
+
+          <div className="mb-4">
+            <h3 className="mb-3 flex items-center gap-2 text-sm font-medium">
+              <span className="material-symbols-outlined text-lg text-accent">code</span>
+              구현 언어
+            </h3>
+            <div className="mb-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
+                  languageMode === 'auto'
+                    ? 'border-accent bg-accent-dim text-foreground'
+                    : 'border-border bg-surface-container-lowest text-muted hover:border-accent'
+                }`}
+                onClick={() => setLanguageMode('auto')}
+              >
+                자동 선택 (AI가 계획서 분석)
+              </button>
+              <button
+                type="button"
+                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
+                  languageMode === 'manual'
+                    ? 'border-accent bg-accent-dim text-foreground'
+                    : 'border-border bg-surface-container-lowest text-muted hover:border-accent'
+                }`}
+                onClick={() => setLanguageMode('manual')}
+              >
+                직접 지정
+              </button>
+            </div>
+            {languageMode === 'manual' && (
+              <select
+                value={programmingLanguage}
+                onChange={(e) =>
+                  setProgrammingLanguage(e.target.value as ProgrammingLanguage)
+                }
+                className="block w-full rounded-lg border border-border bg-surface-container-lowest px-4 py-2.5 text-foreground outline-none focus:border-accent"
+              >
+                {PROGRAMMING_LANGUAGES.map((lang) => (
+                  <option key={lang.value} value={lang.value}>
+                    {lang.label}
+                  </option>
+                ))}
+              </select>
+            )}
+            {languageMode === 'auto' && (
+              <p className="text-xs text-muted">
+                Summarize 단계에서 계획서를 분석해 예상 사용자 규모, 서버 성능·비용,
+                배포 환경, 한국 산업 맥락(공공·대기업은 Java, 빠른 출시 스타트업은 Python 등)을
+                종합해 최적의 언어를 자동으로 결정합니다.
+              </p>
+            )}
+          </div>
+
 
           <div
             className={`${dropzoneClass(false, !!devopsFile)} mb-4 p-5`}
@@ -257,7 +317,8 @@ export function NewProjectPage() {
               인프라/CI/CD 설계
             </li>
             <li>
-              <strong className="text-foreground">Design</strong> — Stitch로 UI 디자인
+              <strong className="text-foreground">Design</strong> — Stitch AI 생성 또는 Figma
+              디자인 파일
             </li>
             <li>
               <strong className="text-foreground">Implement</strong> — Codex 5.3이 코드 + DevOps

@@ -1,0 +1,21 @@
+# Stitch Bearer 자동 갱신 — 호스트 gcloud ADC를 api/worker/orchestrator에 전달
+# compose-up.sh / podman-up.sh 가 ADC 파일이 있을 때만 -f compose.gcloud.yml 을 추가합니다.
+
+services:
+  api:
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-adc.json
+    volumes:
+      - ${HOST_GCLOUD_ADC}:/run/secrets/gcp-adc.json:ro
+
+  orchestrator:
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-adc.json
+    volumes:
+      - ${HOST_GCLOUD_ADC}:/run/secrets/gcp-adc.json:ro
+
+  worker:
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-adc.json
+    volumes:
+      - ${HOST_GCLOUD_ADC}:/run/secrets/gcp-adc.json:ro

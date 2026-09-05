@@ -1,20 +1,28 @@
 use crate::app::App;
 use crate::domain::{
-    DailyLogSummary, DevopsPlanInput, PipelineModelConfig, PipelineState, ProjectDetailView,
-    ProjectView, StageState,
+    ArchitectureAnswerInput, DailyLogSummary, DevopsPlanInput, LanguageMode, PipelineModelConfig,
+    PipelineState, ProgrammingLanguage, ProjectDetailView, ProjectView, StageId,
 };
 use crate::error::{AutoForgeError, Result};
 use crate::services::artifacts::{
     detect_image_extension, guess_image_content_type, ArtifactStore, MEDIA_DIR,
 };
+use crate::services::daily_log::DailyEvent;
+use crate::services::daily_log_notify::record_daily_event;
 use crate::services::github::ensure_project_repo;
 use crate::services::health::{self, HealthReport};
-use crate::services::pipeline::{run_inline, start_project_mq};
+use crate::services::pipeline::engine::{
+    prepare_pipeline_restart, resume_project_pipeline, run_inline,
+    submit_architecture_answers as apply_architecture_answers,
+};
+use crate::services::pipeline::start_project_mq;
 use actix_multipart::Multipart;
 use actix_web::http::header;
 use actix_web::{web, HttpResponse};
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::{stream, StreamExt, TryStreamExt};
+use serde::Deserialize;
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
 
 /// Liveness — 프로세스 생존 확인 (의존성 프로브 없음)
@@ -30,6 +38,7 @@ pub async fn health(app: web::Data<Arc<App>>) -> HttpResponse {
         "worker_concurrency": report.worker_concurrency,
         "github_auto_merge": report.github_auto_merge,
         "auth_enabled": app.config.auth_enabled(),
+        "session_login_enabled": app.config.session_login_enabled(),
     }))
 }
 
@@ -64,6 +73,8 @@ pub async fn create_project(
 ) -> Result<HttpResponse> {
     let mut name: Option<String> = None;
     let mut repo_url: Option<String> = None;
+    let mut programming_language: Option<ProgrammingLanguage> = None;
+    let mut language_mode = LanguageMode::Auto;
     let mut pdf_bytes: Option<Vec<u8>> = None;
     let mut devops_plan = DevopsPlanInput::default();
     let mut model_config = PipelineModelConfig::default();
@@ -131,6 +142,29 @@ pub async fn create_project(
                 devops_plan.filename = field_filename;
                 devops_plan.content_type = field_content_type;
             }
+            "programming_language" | "language" => {
+                let value = String::from_utf8_lossy(&data).trim().to_lowercase();
+                if !value.is_empty() && value != "auto" {
+                    programming_language =
+                        Some(ProgrammingLanguage::from_str_loose(&value).ok_or_else(|| {
+                            AutoForgeError::BadRequest(format!(
+                                "unsupported programming_language: {value}"
+                            ))
+                        })?);
+                }
+            }
+            "language_mode" => {
+                let value = String::from_utf8_lossy(&data).trim().to_lowercase();
+                language_mode = match value.as_str() {
+                    "auto" | "" => LanguageMode::Auto,
+                    "manual" | "specified" => LanguageMode::Manual,
+                    other => {
+                        return Err(AutoForgeError::BadRequest(format!(
+                            "invalid language_mode: {other} (use auto or manual)"
+                        )));
+                    }
+                };
+            }
             "plan" | "pdf" | "file" => pdf_bytes = Some(data),
             "model_config" | "models" => {
                 let text = String::from_utf8_lossy(&data);
@@ -155,15 +189,31 @@ pub async fn create_project(
         return Err(AutoForgeError::BadRequest("invalid PDF file".into()));
     }
 
-    let mut project = app.create_project(name, repo_url, model_config).await;
+    if language_mode == LanguageMode::Manual && programming_language.is_none() {
+        return Err(AutoForgeError::BadRequest(
+            "programming_language is required when language_mode is manual".into(),
+        ));
+    }
+
+    let mut project = app
+        .create_project(
+            name,
+            repo_url,
+            programming_language,
+            language_mode,
+            model_config,
+        )
+        .await;
     project.pdf_bytes = Some(pdf);
     if devops_plan.has_content() {
         project.devops_plan = Some(devops_plan);
     }
 
-    // GitHub 프라이빗 레포 자동 생성 (repo_url 미지정 시)
+    // GitHub 프라이빗 레포 자동 생성 (repo_url 미지정 시). 실패해도 프로젝트 생성은 계속한다.
     if project.repo_url.is_none() {
-        ensure_project_repo(&app, &mut project).await?;
+        if let Err(e) = ensure_project_repo(&app, &mut project).await {
+            tracing::warn!(error = %e, "github auto-repo creation failed; continuing without auto repo");
+        }
         if project.repo_url.is_none() {
             project.repo_url = app.config.default_repo_url.clone();
         }
@@ -196,13 +246,49 @@ pub async fn create_project(
         "message": if app.queue.is_some() { "pipeline queued" } else { "pipeline started" },
         "mode": if app.queue.is_some() { "message_queue" } else { "inline" },
         "stream_url": format!("/v1/projects/{project_id}/stream"),
+        "ws_url": format!("/v1/projects/{project_id}/ws"),
         "progress_percent": project.progress_percent(),
         "github_auto_created": project.stage_outputs.get(&crate::domain::StageId::Ingest)
             .and_then(|m| m.get("auto_created"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         "has_devops_plan": project.devops_plan.as_ref().is_some_and(|d| d.has_content()),
+        "programming_language": project.programming_language.map(|l| l.as_str()),
+        "language_mode": project.language_mode,
         "model_config": project.model_config,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubmitArchitectureAnswersRequest {
+    pub answers: Vec<ArchitectureAnswerInput>,
+}
+
+/// 아키텍처 설계 단계 질문에 대한 답변 제출 및 파이프라인 재개
+pub async fn submit_architecture_answers(
+    app: web::Data<Arc<App>>,
+    path: web::Path<Uuid>,
+    body: web::Json<SubmitArchitectureAnswersRequest>,
+) -> Result<HttpResponse> {
+    let id = path.into_inner();
+    let mut project = app
+        .get_project(id)
+        .await
+        .ok_or_else(|| AutoForgeError::NotFound(format!("project {id}")))?;
+
+    apply_architecture_answers(&app, &mut project, body.answers.clone()).await?;
+    app.store.save(&project).await?;
+    resume_project_pipeline(app.get_ref().clone(), id).await?;
+
+    let project = app.get_project(id).await.ok_or_else(|| {
+        AutoForgeError::Internal("project lost after architecture answers".into())
+    })?;
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "id": id,
+        "state": project.state,
+        "message": "architecture answers submitted, pipeline resumed",
+        "architecture_clarifications": project.architecture_clarifications,
     })))
 }
 
@@ -227,41 +313,43 @@ pub async fn stream_project(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse> {
     let id = path.into_inner();
-    let project = app
-        .get_project(id)
-        .await
-        .ok_or_else(|| AutoForgeError::NotFound(format!("project {id}")))?;
+    if app.get_project(id).await.is_none() {
+        return Err(AutoForgeError::NotFound(format!("project {id}")));
+    }
 
-    let stages: Vec<_> = crate::domain::StageId::all()
-        .iter()
-        .map(|stage| {
-            let status = project
-                .stages
-                .get(stage)
-                .copied()
-                .unwrap_or(StageState::Queued);
-            serde_json::json!({
-                "stage": stage.as_str(),
-                "status": format!("{status:?}").to_lowercase(),
-            })
-        })
-        .collect();
+    let app = app.get_ref().clone();
+    let stream = stream::unfold((app, id, false), |(app, id, done)| async move {
+        if done {
+            return None;
+        }
 
-    let body = format!(
-        "event: status\ndata: {}\n\n",
-        serde_json::json!({
-            "project_id": id,
-            "state": project.state,
-            "progress_percent": project.progress_percent(),
-            "stages": stages,
-        })
-    );
+        let project = app.get_project(id).await?;
+        let view = ProjectDetailView::from(&project);
+        let body = format!(
+            "event: status\ndata: {}\n\n",
+            serde_json::to_string(&view).unwrap_or_default()
+        );
+
+        let terminal = matches!(
+            project.state,
+            PipelineState::Completed | PipelineState::Failed | PipelineState::Cancelled
+        );
+
+        if !terminal {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+
+        Some((
+            Ok::<actix_web::web::Bytes, actix_web::Error>(actix_web::web::Bytes::from(body)),
+            (app, id, terminal),
+        ))
+    });
 
     Ok(HttpResponse::Ok()
         .content_type("text/event-stream")
         .insert_header((header::CACHE_CONTROL, "no-cache"))
         .insert_header((header::CONNECTION, "keep-alive"))
-        .body(body))
+        .streaming(stream))
 }
 
 pub async fn cancel_project(
@@ -280,6 +368,65 @@ pub async fn cancel_project(
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "id": id,
         "state": "cancelled",
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RestartPipelineRequest {
+    #[serde(default)]
+    pub model_config: Option<PipelineModelConfig>,
+    #[serde(default)]
+    pub from_stage: Option<StageId>,
+}
+
+/// 실패한 파이프라인을 재시작한다. 선택적으로 AI 모델 설정을 갱신한다.
+pub async fn restart_project(
+    app: web::Data<Arc<App>>,
+    path: web::Path<Uuid>,
+    body: web::Json<RestartPipelineRequest>,
+) -> Result<HttpResponse> {
+    let id = path.into_inner();
+    let mut project = app
+        .get_project(id)
+        .await
+        .ok_or_else(|| AutoForgeError::NotFound(format!("project {id}")))?;
+
+    let from_stage = body
+        .from_stage
+        .or_else(|| project.restart_stage())
+        .ok_or_else(|| {
+            AutoForgeError::BadRequest("no stage to restart from (specify from_stage)".into())
+        })?;
+
+    prepare_pipeline_restart(&mut project, from_stage, body.model_config.clone()).await?;
+    app.store.save(&project).await?;
+
+    let _ = record_daily_event(
+        app.get_ref(),
+        &mut project,
+        DailyEvent {
+            event: "pipeline_restarted",
+            stage: Some(from_stage),
+            message: format!("파이프라인 재시작 (from {from_stage:?})"),
+        },
+    )
+    .await;
+    app.store.save(&project).await?;
+
+    resume_project_pipeline(app.get_ref().clone(), id).await?;
+
+    let project = app
+        .get_project(id)
+        .await
+        .ok_or_else(|| AutoForgeError::Internal("project lost after restart".into()))?;
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "id": id,
+        "state": project.state,
+        "from_stage": from_stage.as_str(),
+        "message": "pipeline restarted",
+        "model_config": project.model_config,
+        "progress_percent": project.progress_percent(),
     })))
 }
 

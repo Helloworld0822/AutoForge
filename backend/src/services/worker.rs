@@ -1,9 +1,14 @@
 use crate::clients::agent::{AgentClient, CreateAgentOpts};
+use crate::clients::figma::FigmaClient;
 use crate::clients::stitch::StitchClient;
-use crate::domain::{ArtifactRef, PipelineModelConfig, StageCommand, StageId};
+use crate::domain::{
+    ArtifactRef, LanguageMode, PipelineModelConfig, ProgrammingLanguage, StageCommand, StageId,
+};
 use crate::error::{AutoForgeError, Result};
+use crate::services::architecture_qa::parse_clarification_questions;
 use crate::services::artifacts::ArtifactStore;
 use crate::services::ingest::{ingest_devops_plan, ingest_pdf};
+use crate::services::language::{language_prompt_note, resolve_effective_language};
 use crate::services::quality::{
     DebugReport, SecurityReport, VerifyReport, SECURITY_CHECKS, VERIFY_CHECKS,
 };
@@ -17,10 +22,16 @@ pub struct StageContext {
     pub artifacts: Arc<dyn ArtifactStore>,
     pub agent: Arc<AgentClient>,
     pub stitch: Arc<StitchClient>,
+    pub figma: Arc<FigmaClient>,
     pub input: Vec<ArtifactRef>,
     pub repo_url: Option<String>,
     pub stage_outputs: HashMap<StageId, serde_json::Value>,
     pub pr_url: Option<String>,
+    pub language_mode: LanguageMode,
+    pub programming_language: Option<ProgrammingLanguage>,
+    pub resolved_language: Option<ProgrammingLanguage>,
+    pub architecture_finalize: bool,
+    pub architecture_answers: Vec<(String, String)>,
     pub model_config: PipelineModelConfig,
 }
 
@@ -128,7 +139,7 @@ impl StageExecutor for SummarizeExecutor {
     }
 
     async fn execute(&self, ctx: &StageContext) -> Result<StageOutput> {
-        let prompt = build_summarize_prompt(&ctx.input);
+        let prompt = build_summarize_prompt(ctx);
         let profile = ctx.model_config.profile_for(StageId::Summarize);
 
         let resp = ctx
@@ -146,12 +157,14 @@ impl StageExecutor for SummarizeExecutor {
             .await?;
 
         let text = run
-            .result
-            .and_then(|r| r.text)
+            .result_text()
             .ok_or_else(|| AutoForgeError::StageFailed {
                 stage: StageId::Summarize,
                 message: "empty agent response".into(),
             })?;
+
+        let resolved =
+            resolve_effective_language(ctx.language_mode, ctx.programming_language, &text);
 
         let base = format!("projects/{}/summarize", ctx.command.project_id.0);
         let artifact = ctx
@@ -165,7 +178,10 @@ impl StageExecutor for SummarizeExecutor {
 
         Ok(StageOutput {
             artifacts: vec![artifact],
-            metadata: serde_json::json!({ "agent_id": resp.agent.id }),
+            metadata: serde_json::json!({
+                "agent_id": resp.agent.id,
+                "programming_language": resolved.as_str(),
+            }),
         })
     }
 }
@@ -179,7 +195,11 @@ impl StageExecutor for ArchitectExecutor {
     }
 
     async fn execute(&self, ctx: &StageContext) -> Result<StageOutput> {
-        let prompt = build_architect_prompt(&ctx.input);
+        if ctx.architecture_finalize {
+            return run_architect_finalize(ctx).await;
+        }
+
+        let prompt = build_architect_draft_prompt(ctx);
         let profile = ctx.model_config.profile_for(StageId::Architect);
 
         let resp = ctx
@@ -196,20 +216,46 @@ impl StageExecutor for ArchitectExecutor {
             )
             .await?;
 
-        let text = run.result.and_then(|r| r.text).unwrap_or_default();
+        let text = run.result_text().unwrap_or_default();
+        let questions = parse_clarification_questions(&text).unwrap_or_default();
+
+        if questions.is_empty() {
+            return run_architect_finalize_with_answers(ctx, &[]).await;
+        }
+
         let base = format!("projects/{}/architect", ctx.command.project_id.0);
-        let spec = ctx
+        let questions_json = serde_json::to_string(&serde_json::json!({ "questions": questions }))
+            .unwrap_or_default();
+        let draft = ctx
             .artifacts
             .put(
-                &format!("{base}/spec.md"),
-                Bytes::from(text),
-                "text/markdown",
+                &format!("{base}/clarifications.json"),
+                Bytes::from(questions_json),
+                "application/json",
             )
             .await?;
 
+        let question_views: Vec<_> = questions
+            .iter()
+            .map(|q| {
+                serde_json::json!({
+                    "id": q.id,
+                    "question": q.question,
+                    "options": q.options,
+                    "required": q.required,
+                    "category": q.category,
+                })
+            })
+            .collect();
+
         Ok(StageOutput {
-            artifacts: vec![spec],
-            metadata: serde_json::json!({ "agent_id": resp.agent.id }),
+            artifacts: vec![draft],
+            metadata: serde_json::json!({
+                "phase": "draft",
+                "agent_id": resp.agent.id,
+                "questions": question_views,
+                "question_count": questions.len(),
+            }),
         })
     }
 }
@@ -223,23 +269,132 @@ impl StageExecutor for DesignExecutor {
     }
 
     async fn execute(&self, ctx: &StageContext) -> Result<StageOutput> {
-        let prompt = build_design_prompt(&ctx.input);
-        let device_type = ctx.model_config.design_device_type();
-        let screen = ctx.stitch.generate_screen(&prompt, device_type).await?;
-        let html = ctx.stitch.get_screen_html(&screen.id).await?;
+        if ctx.model_config.uses_figma_design() {
+            return execute_figma_design(ctx).await;
+        }
+        execute_stitch_design(ctx).await
+    }
+}
 
-        let artifact = ArtifactRef {
-            name: format!("screens/{}.html", screen.id),
-            key: html.download_url.clone(),
-            uri: html.download_url,
-            content_type: "text/html".into(),
-            sha256: None,
-        };
+async fn execute_stitch_design(ctx: &StageContext) -> Result<StageOutput> {
+    let prompt = build_design_prompt(&ctx.input);
+    let device_type = ctx.model_config.design_device_type();
 
-        Ok(StageOutput {
-            artifacts: vec![artifact],
-            metadata: serde_json::json!({ "screen_id": screen.id }),
+    let existing_stitch_project = ctx
+        .stage_outputs
+        .get(&StageId::Design)
+        .and_then(|v| v.get("stitch_project_id"))
+        .and_then(|v| v.as_str());
+
+    let project_title = format!("AutoForge {}", ctx.command.project_id.0);
+    let stitch_project_id = ctx
+        .stitch
+        .ensure_project(&project_title, existing_stitch_project)
+        .await?;
+
+    let screen = ctx
+        .stitch
+        .generate_screen(&stitch_project_id, &prompt, device_type)
+        .await?;
+    let html = ctx
+        .stitch
+        .get_screen_html(&stitch_project_id, &screen.id)
+        .await?;
+
+    let artifact = ArtifactRef {
+        name: format!("screens/{}.html", screen.id),
+        key: html.download_url.clone(),
+        uri: html.download_url,
+        content_type: "text/html".into(),
+        sha256: None,
+    };
+
+    Ok(StageOutput {
+        artifacts: vec![artifact],
+        metadata: serde_json::json!({
+            "screen_id": screen.id,
+            "screen_name": screen.name,
+            "stitch_project_id": stitch_project_id,
+            "design_source": "stitch",
+        }),
+    })
+}
+
+async fn execute_figma_design(ctx: &StageContext) -> Result<StageOutput> {
+    let figma_url = ctx
+        .model_config
+        .figma_file_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| {
+            AutoForgeError::BadRequest(
+                "figma_file_url is required when design_source is figma".into(),
+            )
+        })?;
+
+    let export = ctx.figma.export_design(figma_url).await?;
+    let base = format!("projects/{}/design", ctx.command.project_id.0);
+    let mut artifacts = Vec::new();
+
+    let design_json = ctx
+        .artifacts
+        .put(
+            &format!("{base}/figma-design.json"),
+            Bytes::from(export.design_json.to_string()),
+            "application/json",
+        )
+        .await?;
+    artifacts.push(design_json);
+
+    let mut screen_meta = Vec::new();
+    for screen in export.screens {
+        let slug = slugify_filename(&screen.name);
+        let artifact = ctx
+            .artifacts
+            .put(
+                &format!("{base}/screens/{slug}.png"),
+                screen.image_bytes,
+                "image/png",
+            )
+            .await?;
+        screen_meta.push(serde_json::json!({
+            "node_id": screen.node_id,
+            "name": screen.name,
+            "artifact": artifact.name,
+            "uri": artifact.uri,
+        }));
+        artifacts.push(artifact);
+    }
+
+    Ok(StageOutput {
+        artifacts,
+        metadata: serde_json::json!({
+            "design_source": "figma",
+            "figma_file_key": export.file_key,
+            "figma_file_name": export.file_name,
+            "figma_file_url": export.figma_url,
+            "screens": screen_meta,
+        }),
+    })
+}
+
+fn slugify_filename(name: &str) -> String {
+    let slug: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
         })
+        .collect();
+    let trimmed = slug.trim_matches('-');
+    if trimmed.is_empty() {
+        "screen".into()
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -257,7 +412,7 @@ impl StageExecutor for ImplementExecutor {
             .as_deref()
             .ok_or_else(|| AutoForgeError::BadRequest("repo_url required".into()))?;
 
-        let prompt = build_implement_prompt(&ctx.input);
+        let prompt = build_implement_prompt(ctx);
         let profile = ctx.model_config.profile_for(StageId::Implement);
 
         let opts = CreateAgentOpts {
@@ -322,7 +477,7 @@ impl StageExecutor for VerifyExecutor {
             )
             .await?;
 
-        let text = run.result.and_then(|r| r.text).unwrap_or_default();
+        let text = run.result_text().unwrap_or_default();
         let report = VerifyReport::parse_from_agent_text(&text);
         let base = format!("projects/{}/verify", ctx.command.project_id.0);
 
@@ -380,7 +535,7 @@ impl StageExecutor for DebugExecutor {
             )
             .await?;
 
-        let text = run.result.and_then(|r| r.text).unwrap_or_default();
+        let text = run.result_text().unwrap_or_default();
         let report = DebugReport {
             fixes_applied: vec!["auto-debug via agent".into()],
             files_changed: vec![],
@@ -435,7 +590,7 @@ impl StageExecutor for SecurityPatchExecutor {
             )
             .await?;
 
-        let text = run.result.and_then(|r| r.text).unwrap_or_default();
+        let text = run.result_text().unwrap_or_default();
         let report = SecurityReport::parse_from_agent_text(&text);
         let base = format!("projects/{}/security", ctx.command.project_id.0);
 
@@ -517,34 +672,135 @@ pub fn executors() -> Vec<Arc<dyn StageExecutor>> {
     ]
 }
 
-fn build_summarize_prompt(inputs: &[ArtifactRef]) -> String {
+fn build_summarize_prompt(ctx: &StageContext) -> String {
+    let inputs = &ctx.input;
     let has_devops = inputs.iter().any(|a| a.name.starts_with("devops_plan"));
     let devops_note = if has_devops {
         "DevOps 계획서(devops_plan*)가 포함되어 있습니다. devops_requirements, infrastructure, ci_cd 필드를 반드시 채우세요.\n"
     } else {
         ""
     };
+    let lang_note = language_prompt_note(
+        ctx.language_mode,
+        ctx.programming_language,
+        ctx.resolved_language,
+    );
     format!(
         "다음 외주 계획서를 분석하여 strict JSON으로 요약하세요.\n\
          필드: title, goals[], scope, constraints[], tech_hints[], ui_requirements[], \
-         devops_requirements[], infrastructure[], ci_cd[], timeline, budget_hint\n\
+         devops_requirements[], infrastructure[], ci_cd[], timeline, budget_hint, \
+         programming_language, language_rationale\n\
+         programming_language: 프로젝트에 가장 적합한 주 구현 언어 (rust|typescript|python|go|java|kotlin|swift|csharp|ruby|php)\n\
+         {lang_note}\
          {devops_note}\
          입력 아티팩트: {:?}",
         inputs.iter().map(|a| &a.uri).collect::<Vec<_>>()
     )
 }
 
-fn build_architect_prompt(inputs: &[ArtifactRef]) -> String {
+fn build_architect_draft_prompt(ctx: &StageContext) -> String {
+    let inputs = &ctx.input;
+    let has_devops = inputs.iter().any(|a| a.name.starts_with("devops_plan"));
+    let devops_note = if has_devops {
+        "DevOps 계획서를 고려하여 인프라/배포 관련 질문도 포함하세요.\n"
+    } else {
+        ""
+    };
+    let lang_note = language_prompt_note(
+        ctx.language_mode,
+        ctx.programming_language,
+        ctx.resolved_language,
+    );
+    format!(
+        "summary.json을 분석하여 아키텍처 설계 전에 사용자에게 확인이 필요한 질문 목록을 작성하세요.\n\
+         {lang_note}\
+         {devops_note}\
+         strict JSON만 출력하세요:\n\
+         {{\"questions\":[{{\"id\":\"q1\",\"text\":\"질문\",\"options\":[\"선택지1\",\"선택지2\"],\"required\":true,\"category\":\"database|auth|scale|stack|other\"}}]}}\n\
+         - 모호한 요구사항, 기술 스택 선택, 데이터 모델, 인증 방식, 배포 환경 등을 3~7개 질문으로 정리\n\
+         - options가 있으면 사용자가 선택할 수 있게 제공\n\
+         - 명확한 계획서라면 questions를 빈 배열로 반환 가능\n\
+         입력: {:?}",
+        inputs.iter().map(|a| &a.uri).collect::<Vec<_>>()
+    )
+}
+
+async fn run_architect_finalize(ctx: &StageContext) -> Result<StageOutput> {
+    run_architect_finalize_with_answers(ctx, &ctx.architecture_answers).await
+}
+
+async fn run_architect_finalize_with_answers(
+    ctx: &StageContext,
+    answers: &[(String, String)],
+) -> Result<StageOutput> {
+    let prompt = build_architect_finalize_prompt(ctx, answers);
+    let profile = ctx.model_config.profile_for(StageId::Architect);
+
+    let resp = ctx
+        .agent
+        .create_agent(&prompt, &profile, CreateAgentOpts::default())
+        .await?;
+
+    let run = ctx
+        .agent
+        .wait_for_run(
+            &resp.agent.id,
+            &resp.run.id,
+            std::time::Duration::from_secs(10),
+        )
+        .await?;
+
+    let text = run.result_text().unwrap_or_default();
+    let base = format!("projects/{}/architect", ctx.command.project_id.0);
+    let spec = ctx
+        .artifacts
+        .put(
+            &format!("{base}/spec.md"),
+            Bytes::from(text),
+            "text/markdown",
+        )
+        .await?;
+
+    Ok(StageOutput {
+        artifacts: vec![spec],
+        metadata: serde_json::json!({
+            "phase": "finalize",
+            "agent_id": resp.agent.id,
+        }),
+    })
+}
+
+fn build_architect_finalize_prompt(ctx: &StageContext, answers: &[(String, String)]) -> String {
+    let inputs = &ctx.input;
     let has_devops = inputs.iter().any(|a| a.name.starts_with("devops_plan"));
     let devops_note = if has_devops {
         "DevOps 계획서를 반영하여 infrastructure.md, cicd_pipeline.md, deploy_manifest.yaml 초안도 포함하세요.\n"
     } else {
         ""
     };
+    let lang_note = language_prompt_note(
+        ctx.language_mode,
+        ctx.programming_language,
+        ctx.resolved_language,
+    );
+    let answers_note = if answers.is_empty() {
+        "추가 질의응답 없이 summary.json만으로 설계하세요.\n".to_string()
+    } else {
+        let lines: Vec<String> = answers
+            .iter()
+            .map(|(id, ans)| format!("- {id}: {ans}"))
+            .collect();
+        format!(
+            "사용자가 아래 질문에 답변했습니다. 반드시 반영하세요:\n{}\n",
+            lines.join("\n")
+        )
+    };
     format!(
-        "summary.json을 기반으로 시스템 아키텍처(architecture.md)와 상세 기획(spec.md), \
+        "summary.json과 사용자 답변을 기반으로 시스템 아키텍처(architecture.md)와 상세 기획(spec.md), \
          구현 태스크 DAG(tasks.json)를 작성하세요.\n\
+         {lang_note}\
          {devops_note}\
+         {answers_note}\
          입력: {:?}",
         inputs.iter().map(|a| &a.uri).collect::<Vec<_>>()
     )
@@ -558,7 +814,8 @@ fn build_design_prompt(inputs: &[ArtifactRef]) -> String {
     )
 }
 
-fn build_implement_prompt(inputs: &[ArtifactRef]) -> String {
+fn build_implement_prompt(ctx: &StageContext) -> String {
+    let inputs = &ctx.input;
     let has_devops = inputs.iter().any(|a| a.name.starts_with("devops_plan"));
     let devops_note = if has_devops {
         "DevOps 계획서에 따라 Containerfile, compose.yml, CI/CD 워크플로우(.github/workflows), \
@@ -566,8 +823,15 @@ fn build_implement_prompt(inputs: &[ArtifactRef]) -> String {
     } else {
         ""
     };
+    let lang_note = language_prompt_note(
+        ctx.language_mode,
+        ctx.programming_language,
+        ctx.resolved_language,
+    );
     format!(
-        "tasks.json 순서대로 구현하세요. design/screens/ 의 Stitch HTML을 UI 참고로 사용하세요.\n\
+        "tasks.json 순서대로 구현하세요. design/screens/ 의 UI 참고 자료를 사용하세요. \
+         Stitch HTML 또는 Figma PNG/export JSON이 포함될 수 있습니다.\n\
+         {lang_note}\
          {devops_note}\
          입력: {:?}",
         inputs.iter().map(|a| &a.uri).collect::<Vec<_>>()

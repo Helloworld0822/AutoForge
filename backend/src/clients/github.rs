@@ -84,6 +84,17 @@ impl GitHubClient {
         self.auto_merge
     }
 
+    fn create_repo_url(&self) -> String {
+        if self.org.as_ref().is_some_and(|org| !org.trim().is_empty()) {
+            format!(
+                "{GITHUB_API}/orgs/{}/repos",
+                self.org.as_ref().unwrap().trim()
+            )
+        } else {
+            format!("{GITHUB_API}/user/repos")
+        }
+    }
+
     /// GitHub 프라이빗 레포 자동 생성 (auto_init README 포함)
     pub async fn create_private_repo(
         &self,
@@ -99,11 +110,7 @@ impl GitHubClient {
             "has_projects": false,
         });
 
-        let url = if let Some(org) = &self.org {
-            format!("{GITHUB_API}/orgs/{org}/repos")
-        } else {
-            format!("{GITHUB_API}/user/repos")
-        };
+        let url = self.create_repo_url();
 
         let resp = self
             .http
@@ -354,5 +361,19 @@ mod tests {
         let slug = super::slugify_repo_name("테스트 프로젝트!", "a1b2c3d4");
         assert!(slug.ends_with("-a1b2c3d4"));
         assert!(slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    }
+
+    #[test]
+    fn empty_org_uses_user_repos_endpoint() {
+        let client = GitHubClient::new("ghp_test".into(), Some(String::new()), true).unwrap();
+        let url = client.create_repo_url();
+        assert_eq!(url, "https://api.github.com/user/repos");
+    }
+
+    #[test]
+    fn org_uses_org_repos_endpoint() {
+        let client = GitHubClient::new("ghp_test".into(), Some("acme".into()), true).unwrap();
+        let url = client.create_repo_url();
+        assert_eq!(url, "https://api.github.com/orgs/acme/repos");
     }
 }

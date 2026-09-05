@@ -55,6 +55,39 @@ compose_engine() {
   fi
 }
 
+# podman-compose가 만든 네트워크는 com.docker.compose.network 라벨이 없어
+# docker compose (DOCKER_HOST=podman.sock) 실행 시 실패한다.
+repair_mislabeled_compose_network() {
+  local engine="$1"
+  if [[ "$engine" != "podman" ]]; then
+    return 0
+  fi
+
+  local network_name project_name label
+  network_name="$(
+    DOCKER_HOST="$(podman_socket)" docker compose -f "$COMPOSE_FILE" config --format json 2>/dev/null \
+      | python3 -c "import json,sys; c=json.load(sys.stdin); print(c.get('networks',{}).get('default',{}).get('name', c.get('name','') + '_default'))"
+  )" || return 0
+  [[ -n "$network_name" ]] || return 0
+
+  if ! podman network exists "$network_name" &>/dev/null; then
+    return 0
+  fi
+
+  label="$(podman network inspect "$network_name" --format '{{index .Labels "com.docker.compose.network"}}' 2>/dev/null || true)"
+  if [[ "$label" == "default" ]]; then
+    return 0
+  fi
+
+  project_name="${network_name%_default}"
+  echo "NOTE: network ${network_name} has stale compose labels (com.docker.compose.network=\"${label}\", expected \"default\")"
+  echo "==> Removing stale Podman Compose resources for project ${project_name}..."
+
+  podman ps -aq --filter "network=${network_name}" 2>/dev/null | xargs -r podman rm -f
+  podman pod rm -f "pod_${project_name}" 2>/dev/null || true
+  podman network rm -f "$network_name"
+}
+
 run_compose() {
   local engine
   engine="$(compose_engine)" || {
@@ -62,15 +95,25 @@ run_compose() {
     exit 1
   }
 
+  local compose_args=(-f "$COMPOSE_FILE")
+  local adc_path="${HOST_GCLOUD_ADC:-${HOME}/.config/gcloud/application_default_credentials.json}"
+  if [[ -f "$adc_path" ]]; then
+    export HOST_GCLOUD_ADC="$adc_path"
+    compose_args+=(-f compose.gcloud.yml)
+    echo "==> Mounting gcloud ADC for Stitch Bearer auto-refresh"
+  else
+    echo "NOTE: No gcloud ADC at ${adc_path} — set a fresh STITCH_ACCESS_TOKEN or run: gcloud auth application-default login"
+  fi
+
   case "$engine" in
     docker)
-      docker compose -f "$COMPOSE_FILE" "$@"
+      docker compose "${compose_args[@]}" "$@"
       ;;
     podman)
-      DOCKER_HOST="$(podman_socket)" docker compose -f "$COMPOSE_FILE" "$@"
+      DOCKER_HOST="$(podman_socket)" docker compose "${compose_args[@]}" "$@"
       ;;
     podman-compose)
-      podman-compose -f "$COMPOSE_FILE" "$@"
+      podman-compose "${compose_args[@]}" "$@"
       ;;
   esac
 }
@@ -83,6 +126,30 @@ engine="$(compose_engine)" || {
 if [[ "$engine" == "podman" || "$engine" == "podman-compose" ]]; then
   apply_podman_port_defaults
 fi
+
+repair_mislabeled_compose_network "$engine"
+
+bootstrap_rabbitmq_data() {
+  if [[ "$engine" != "podman" && "$engine" != "podman-compose" ]]; then
+    return 0
+  fi
+
+  local data_dir="${RABBITMQ_DATA_DIR:-data/rabbitmq}"
+  mkdir -p "$data_dir"
+
+  # Fresh bind mount: rootless Podman copy-up can leave .erlang.cookie owned by the host user.
+  if [[ -d "$data_dir/mnesia" ]]; then
+    return 0
+  fi
+
+  echo "==> Bootstrapping RabbitMQ data in ${data_dir} (rootless Podman)..."
+  podman run --rm --user 0:0 \
+    -v "$(pwd)/${data_dir}:/var/lib/rabbitmq" \
+    docker.io/library/rabbitmq:3-management-alpine \
+    sh -c 'rabbitmq-server -detached; for i in $(seq 1 30); do rabbitmq-diagnostics -q ping && exit 0; sleep 1; done; exit 1'
+}
+
+bootstrap_rabbitmq_data
 
 echo "==> Building and starting AutoForge stack (${engine}, ${COMPOSE_FILE})"
 run_compose up -d --build --scale "worker=${WORKER_SCALE}"

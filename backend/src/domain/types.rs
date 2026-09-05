@@ -81,7 +81,7 @@ impl ModelProfile {
 
     pub fn architect() -> Self {
         Self {
-            model_id: "claude-4.6-sonnet-high-thinking".into(),
+            model_id: "claude-sonnet-4-6".into(),
             mode: AgentMode::Plan,
             params: vec![],
         }
@@ -89,7 +89,7 @@ impl ModelProfile {
 
     pub fn implement() -> Self {
         Self {
-            model_id: "gpt-5.3-codex-high".into(),
+            model_id: "gpt-5.3-codex".into(),
             mode: AgentMode::Agent,
             params: vec![],
         }
@@ -97,7 +97,7 @@ impl ModelProfile {
 
     pub fn verify() -> Self {
         Self {
-            model_id: "gpt-5.3-codex-high".into(),
+            model_id: "gpt-5.3-codex".into(),
             mode: AgentMode::Agent,
             params: vec![],
         }
@@ -105,7 +105,7 @@ impl ModelProfile {
 
     pub fn debug() -> Self {
         Self {
-            model_id: "gpt-5.3-codex-high".into(),
+            model_id: "gpt-5.3-codex".into(),
             mode: AgentMode::Agent,
             params: vec![],
         }
@@ -113,7 +113,7 @@ impl ModelProfile {
 
     pub fn security_patch() -> Self {
         Self {
-            model_id: "claude-fable-5-thinking-high".into(),
+            model_id: "claude-fable-5".into(),
             mode: AgentMode::Agent,
             params: vec![],
         }
@@ -150,6 +150,12 @@ pub struct PipelineModelConfig {
     /// Stitch 디자인 단계 디바이스 타입 (DESKTOP | MOBILE)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design_device_type: Option<String>,
+    /// Design 단계 소스: stitch | figma (기본 stitch)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_source: Option<String>,
+    /// Figma 디자인/파일 URL (design_source=figma일 때)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub figma_file_url: Option<String>,
 }
 
 impl PipelineModelConfig {
@@ -186,6 +192,17 @@ impl PipelineModelConfig {
             .unwrap_or("DESKTOP")
     }
 
+    pub fn design_source(&self) -> &str {
+        self.design_source
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("stitch")
+    }
+
+    pub fn uses_figma_design(&self) -> bool {
+        self.design_source().eq_ignore_ascii_case("figma")
+    }
+
     pub fn defaults_view() -> Self {
         Self {
             summarize: Some(ModelProfile::summarize().model_id),
@@ -195,6 +212,39 @@ impl PipelineModelConfig {
             debug: Some(ModelProfile::debug().model_id),
             security_patch: Some(ModelProfile::security_patch().model_id),
             design_device_type: Some("DESKTOP".into()),
+            design_source: Some("stitch".into()),
+            figma_file_url: None,
+        }
+    }
+
+    /// `other`의 Some 필드만 현재 설정에 병합한다.
+    pub fn merge_from(&mut self, other: &Self) {
+        if other.summarize.is_some() {
+            self.summarize = other.summarize.clone();
+        }
+        if other.architect.is_some() {
+            self.architect = other.architect.clone();
+        }
+        if other.implement.is_some() {
+            self.implement = other.implement.clone();
+        }
+        if other.verify.is_some() {
+            self.verify = other.verify.clone();
+        }
+        if other.debug.is_some() {
+            self.debug = other.debug.clone();
+        }
+        if other.security_patch.is_some() {
+            self.security_patch = other.security_patch.clone();
+        }
+        if other.design_device_type.is_some() {
+            self.design_device_type = other.design_device_type.clone();
+        }
+        if other.design_source.is_some() {
+            self.design_source = other.design_source.clone();
+        }
+        if other.figma_file_url.is_some() {
+            self.figma_file_url = other.figma_file_url.clone();
         }
     }
 }
@@ -204,9 +254,130 @@ impl PipelineModelConfig {
 pub enum PipelineState {
     Pending,
     Running,
+    /// 아키텍처 설계 질문에 대한 사용자 입력 대기
+    AwaitingInput,
     Completed,
     Failed,
     Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgrammingLanguage {
+    Rust,
+    TypeScript,
+    Python,
+    Go,
+    Java,
+    Kotlin,
+    Swift,
+    CSharp,
+    Ruby,
+    Php,
+}
+
+impl ProgrammingLanguage {
+    pub fn all() -> &'static [ProgrammingLanguage] {
+        &[
+            ProgrammingLanguage::Rust,
+            ProgrammingLanguage::TypeScript,
+            ProgrammingLanguage::Python,
+            ProgrammingLanguage::Go,
+            ProgrammingLanguage::Java,
+            ProgrammingLanguage::Kotlin,
+            ProgrammingLanguage::Swift,
+            ProgrammingLanguage::CSharp,
+            ProgrammingLanguage::Ruby,
+            ProgrammingLanguage::Php,
+        ]
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProgrammingLanguage::Rust => "rust",
+            ProgrammingLanguage::TypeScript => "typescript",
+            ProgrammingLanguage::Python => "python",
+            ProgrammingLanguage::Go => "go",
+            ProgrammingLanguage::Java => "java",
+            ProgrammingLanguage::Kotlin => "kotlin",
+            ProgrammingLanguage::Swift => "swift",
+            ProgrammingLanguage::CSharp => "csharp",
+            ProgrammingLanguage::Ruby => "ruby",
+            ProgrammingLanguage::Php => "php",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            ProgrammingLanguage::Rust => "Rust",
+            ProgrammingLanguage::TypeScript => "TypeScript",
+            ProgrammingLanguage::Python => "Python",
+            ProgrammingLanguage::Go => "Go",
+            ProgrammingLanguage::Java => "Java",
+            ProgrammingLanguage::Kotlin => "Kotlin",
+            ProgrammingLanguage::Swift => "Swift",
+            ProgrammingLanguage::CSharp => "C#",
+            ProgrammingLanguage::Ruby => "Ruby",
+            ProgrammingLanguage::Php => "PHP",
+        }
+    }
+
+    pub fn from_str_loose(s: &str) -> Option<Self> {
+        match s
+            .trim()
+            .to_ascii_lowercase()
+            .replace(['-', ' '], "")
+            .as_str()
+        {
+            "rust" => Some(ProgrammingLanguage::Rust),
+            "typescript" | "ts" | "javascript" | "js" | "nodejs" | "node" => {
+                Some(ProgrammingLanguage::TypeScript)
+            }
+            "python" | "py" => Some(ProgrammingLanguage::Python),
+            "go" | "golang" => Some(ProgrammingLanguage::Go),
+            "java" => Some(ProgrammingLanguage::Java),
+            "kotlin" | "kt" => Some(ProgrammingLanguage::Kotlin),
+            "swift" => Some(ProgrammingLanguage::Swift),
+            "csharp" | "c#" | "dotnet" | "cs" => Some(ProgrammingLanguage::CSharp),
+            "ruby" | "rb" => Some(ProgrammingLanguage::Ruby),
+            "php" => Some(ProgrammingLanguage::Php),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LanguageMode {
+    #[default]
+    Auto,
+    Manual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchitectureClarification {
+    pub id: String,
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default = "default_true")]
+    pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<DateTime<Utc>>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchitectureAnswerInput {
+    pub id: String,
+    pub answer: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -351,6 +522,18 @@ pub struct Project {
     /// DevOps 계획서 (CI/CD, 인프라, 배포 파이프라인 등)
     #[serde(default)]
     pub devops_plan: Option<DevopsPlanInput>,
+    /// 사용자가 지정한 구현 언어 (language_mode=manual일 때)
+    #[serde(default)]
+    pub programming_language: Option<ProgrammingLanguage>,
+    /// 자동 선택 vs 사용자 지정
+    #[serde(default)]
+    pub language_mode: LanguageMode,
+    /// summarize 이후 확정된 구현 언어
+    #[serde(default)]
+    pub resolved_language: Option<ProgrammingLanguage>,
+    /// 아키텍처 설계 단계 질의응답
+    #[serde(default)]
+    pub architecture_clarifications: Vec<ArchitectureClarification>,
     /// 스테이지별 메타데이터 (pr_url, verify_report 등)
     pub stage_outputs: HashMap<StageId, serde_json::Value>,
     /// 누적 산출물 참조
@@ -385,6 +568,68 @@ impl Project {
             .clone()
             .unwrap_or_else(|| format!("Project {}", &self.id.0.to_string()[..8]))
     }
+
+    /// 실패·취소된 프로젝트 재시작 시 기본 스테이지
+    pub fn restart_stage(&self) -> Option<StageId> {
+        if let Some(stage) = self.failed_stage() {
+            return Some(stage);
+        }
+        if self.state == PipelineState::Cancelled {
+            return self.current_stage().or(Some(StageId::Ingest));
+        }
+        None
+    }
+
+    /// 실패한 스테이지 (스케줄러 또는 stage map 기준)
+    pub fn failed_stage(&self) -> Option<StageId> {
+        self.scheduler.failed_stage().or_else(|| {
+            self.stages
+                .iter()
+                .find_map(|(stage, state)| (*state == StageState::Failed).then_some(*stage))
+        })
+    }
+
+    /// 현재 실행 중인 스테이지
+    pub fn current_stage(&self) -> Option<StageId> {
+        self.stages
+            .iter()
+            .find_map(|(stage, state)| (*state == StageState::Running).then_some(*stage))
+    }
+
+    /// 최근 파이프라인 활동 (시간순, 최신 항목이 마지막)
+    pub fn recent_activity(&self, limit: usize) -> Vec<DailyLogEntry> {
+        let mut entries: Vec<_> = self
+            .daily_logs
+            .values()
+            .flat_map(|log| log.entries.iter().cloned())
+            .collect();
+        entries.sort_by_key(|e| e.at);
+        if entries.len() > limit {
+            entries.split_off(entries.len() - limit)
+        } else {
+            entries
+        }
+    }
+
+    /// 가장 최근 실패 메시지 (daily log 기준)
+    pub fn last_error_message(&self) -> Option<String> {
+        self.daily_logs
+            .values()
+            .flat_map(|log| log.entries.iter())
+            .filter(|e| e.event.contains("failed"))
+            .max_by_key(|e| e.at)
+            .map(|e| e.message.clone())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActivityEntryView {
+    pub at: DateTime<Utc>,
+    pub event: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<StageId>,
+    pub message: String,
+    pub progress_percent: u8,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -395,11 +640,21 @@ pub struct ProjectView {
     pub state: PipelineState,
     pub stages: Vec<StageStatusView>,
     pub progress_percent: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_stage: Option<StageId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    pub recent_activity: Vec<ActivityEntryView>,
     pub pr_url: Option<String>,
     pub merge_status: Option<String>,
     pub github_repo: Option<String>,
     pub has_devops_plan: bool,
     pub daily_log_count: usize,
+    pub programming_language: Option<String>,
+    pub resolved_language: Option<String>,
+    pub language_mode: LanguageMode,
+    pub awaiting_architecture_input: bool,
+    pub architecture_clarifications: Vec<ArchitectureClarification>,
     pub model_config: PipelineModelConfig,
     pub created_at: DateTime<Utc>,
 }
@@ -446,11 +701,29 @@ impl From<&Project> for ProjectView {
                 })
                 .collect(),
             progress_percent: p.progress_percent(),
+            current_stage: p.current_stage(),
+            last_error: p.last_error_message(),
+            recent_activity: p
+                .recent_activity(30)
+                .into_iter()
+                .map(|e| ActivityEntryView {
+                    at: e.at,
+                    event: e.event,
+                    stage: e.stage,
+                    message: e.message,
+                    progress_percent: e.progress_percent,
+                })
+                .collect(),
             pr_url,
             merge_status,
             github_repo,
             has_devops_plan: p.devops_plan.as_ref().is_some_and(|d| d.has_content()),
             daily_log_count: p.daily_logs.len(),
+            programming_language: p.programming_language.map(|l| l.as_str().to_string()),
+            resolved_language: p.resolved_language.map(|l| l.as_str().to_string()),
+            language_mode: p.language_mode,
+            awaiting_architecture_input: p.state == PipelineState::AwaitingInput,
+            architecture_clarifications: p.architecture_clarifications.clone(),
             model_config: p.model_config.clone(),
             created_at: p.created_at,
         }

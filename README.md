@@ -29,12 +29,12 @@ nginx/Containerfile
                            │
                     orchestrator + worker×N
                            │
-                    redis + artifacts-data(volume)
+                    redis (store) + rabbitmq (MQ) + artifacts-data(volume)
 ```
 
 - **nginx**: 프론트엔드 정적 파일 서빙 + API 프록시
 - **api**: Rust REST API (프론트엔드 정적 파일 미포함)
-- **orchestrator / worker**: Redis Streams 기반 분산 파이프라인
+- **orchestrator / worker**: RabbitMQ 기반 분산 파이프라인
 
 ## 빠른 시작 (Docker / Podman Compose)
 
@@ -135,11 +135,11 @@ curl -X POST http://localhost/v1/images \
 전체 목록은 [.env.example](.env.example) 참고. 주요 카테고리:
 
 - **서버**: `HOST`, `PORT`, `RUST_LOG`
-- **AI API 키**: `AGENT_API_KEY`, `AGENT_API_BASE_URL`, `STITCH_API_KEY` (필수)
+- **AI API 키**: `AGENT_API_KEY`, `AGENT_API_BASE_URL`, `STITCH_API_KEY`, Stitch Bearer (`STITCH_ACCESS_TOKEN` 또는 ADC/gcloud 자동 갱신 — [상세](docs/STITCH_ACCESS_TOKEN.md))
 - **GitHub 자동화**: `GITHUB_TOKEN`, `GITHUB_ORG`, `GITHUB_AUTO_MERGE`
 - **보안**: `API_KEY`, `CORS_ALLOWED_ORIGINS`, `MAX_UPLOAD_BYTES` — 운영 배포 전 반드시 확인
 - **아티팩트/이미지 저장소 (로컬 디스크)**: `ARTIFACTS_DIR`, `MAX_IMAGE_BYTES`
-- **Redis MQ (분산 모드)**: `MESSAGE_QUEUE_ENABLED`, `REDIS_URL` 등 — 기본값은 단일 프로세스(false)
+- **RabbitMQ (분산 모드)**: `MESSAGE_QUEUE_ENABLED`, `RABBITMQ_URL` 등 — 기본값은 단일 프로세스(false). Redis는 프로젝트 스토어/알림용
 - **Slack 알림**: `SLACK_WEBHOOK_URL` 또는 `SLACK_BOT_TOKEN`+`SLACK_CHANNEL`
 
 서버 기동 시 누락되거나 위험한 설정(예: `API_KEY` 미설정, `AGENT_API_KEY`/`AGENT_API_BASE_URL` 비어있음)은
@@ -149,6 +149,7 @@ curl -X POST http://localhost/v1/images \
 
 실사용(프로덕션) 배포 전 최소한 아래 항목을 확인하세요.
 
+- [ ] `AGENT_API_KEY`, `AGENT_API_BASE_URL`, `STITCH_API_KEY`, `STITCH_ACCESS_TOKEN` 설정 — Design 단계에 Stitch Bearer 토큰 필수 ([docs/STITCH_ACCESS_TOKEN.md](docs/STITCH_ACCESS_TOKEN.md))
 - [ ] `API_KEY` 설정 — 미설정 시 REST API가 인증 없이 공개됨
 - [ ] `CORS_ALLOWED_ORIGINS`를 실제 프론트엔드 도메인으로 제한
 - [ ] `ARTIFACTS_DIR`가 영속 볼륨(디스크)을 가리키는지 확인 — Compose 환경에서는
@@ -159,6 +160,7 @@ curl -X POST http://localhost/v1/images \
 
 ## 상세 문서
 
+- [docs/STITCH_ACCESS_TOKEN.md](docs/STITCH_ACCESS_TOKEN.md) — Stitch Bearer 토큰 없을 때 동작
 - [docs/PODMAN.md](docs/PODMAN.md) — Podman / Compose 배포
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 아키텍처 설계
 - [docs/QUALITY_WORKFLOW.md](docs/QUALITY_WORKFLOW.md) — 품질 게이트
