@@ -1,4 +1,4 @@
-use crate::clients::cursor::{CreateAgentOpts, CursorClient};
+use crate::clients::agent::{AgentClient, CreateAgentOpts};
 use crate::clients::figma::FigmaClient;
 use crate::clients::stitch::StitchClient;
 use crate::domain::{
@@ -20,7 +20,7 @@ use std::sync::Arc;
 pub struct StageContext {
     pub command: StageCommand,
     pub artifacts: Arc<dyn ArtifactStore>,
-    pub cursor: Arc<CursorClient>,
+    pub agent: Arc<AgentClient>,
     pub stitch: Arc<StitchClient>,
     pub figma: Arc<FigmaClient>,
     pub input: Vec<ArtifactRef>,
@@ -143,12 +143,12 @@ impl StageExecutor for SummarizeExecutor {
         let profile = ctx.model_config.profile_for(StageId::Summarize);
 
         let resp = ctx
-            .cursor
+            .agent
             .create_agent(&prompt, &profile, CreateAgentOpts::default())
             .await?;
 
         let run = ctx
-            .cursor
+            .agent
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -179,7 +179,7 @@ impl StageExecutor for SummarizeExecutor {
         Ok(StageOutput {
             artifacts: vec![artifact],
             metadata: serde_json::json!({
-                "cursor_agent_id": resp.agent.id,
+                "agent_id": resp.agent.id,
                 "programming_language": resolved.as_str(),
             }),
         })
@@ -203,12 +203,12 @@ impl StageExecutor for ArchitectExecutor {
         let profile = ctx.model_config.profile_for(StageId::Architect);
 
         let resp = ctx
-            .cursor
+            .agent
             .create_agent(&prompt, &profile, CreateAgentOpts::default())
             .await?;
 
         let run = ctx
-            .cursor
+            .agent
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -252,7 +252,7 @@ impl StageExecutor for ArchitectExecutor {
             artifacts: vec![draft],
             metadata: serde_json::json!({
                 "phase": "draft",
-                "cursor_agent_id": resp.agent.id,
+                "agent_id": resp.agent.id,
                 "questions": question_views,
                 "question_count": questions.len(),
             }),
@@ -422,9 +422,9 @@ impl StageExecutor for ImplementExecutor {
             agent_id: None,
         };
 
-        let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
+        let resp = ctx.agent.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
-            .cursor
+            .agent
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -442,7 +442,7 @@ impl StageExecutor for ImplementExecutor {
         Ok(StageOutput {
             artifacts: vec![],
             metadata: serde_json::json!({
-                "cursor_agent_id": resp.agent.id,
+                "agent_id": resp.agent.id,
                 "pr_url": pr_url,
             }),
         })
@@ -467,9 +467,9 @@ impl StageExecutor for VerifyExecutor {
         let profile = ctx.model_config.profile_for(StageId::Verify);
         let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
 
-        let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
+        let resp = ctx.agent.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
-            .cursor
+            .agent
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -495,7 +495,7 @@ impl StageExecutor for VerifyExecutor {
             metadata: serde_json::json!({
                 "passed": report.passed,
                 "errors": report.errors.len(),
-                "cursor_agent_id": resp.agent.id,
+                "agent_id": resp.agent.id,
             }),
         })
     }
@@ -525,9 +525,9 @@ impl StageExecutor for DebugExecutor {
         let profile = ctx.model_config.profile_for(StageId::Debug);
         let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
 
-        let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
+        let resp = ctx.agent.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
-            .cursor
+            .agent
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -537,7 +537,7 @@ impl StageExecutor for DebugExecutor {
 
         let text = run.result_text().unwrap_or_default();
         let report = DebugReport {
-            fixes_applied: vec!["auto-debug via Codex".into()],
+            fixes_applied: vec!["auto-debug via agent".into()],
             files_changed: vec![],
             summary: text.chars().take(300).collect(),
             resolved_errors: 0,
@@ -557,7 +557,7 @@ impl StageExecutor for DebugExecutor {
             artifacts: vec![artifact],
             metadata: serde_json::json!({
                 "debug_cycle": ctx.command.attempt,
-                "cursor_agent_id": resp.agent.id,
+                "agent_id": resp.agent.id,
             }),
         })
     }
@@ -580,9 +580,9 @@ impl StageExecutor for SecurityPatchExecutor {
         let profile = ctx.model_config.profile_for(StageId::SecurityPatch);
         let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
 
-        let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
+        let resp = ctx.agent.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
-            .cursor
+            .agent
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -609,7 +609,7 @@ impl StageExecutor for SecurityPatchExecutor {
                 "passed": report.passed,
                 "vulnerabilities_found": report.vulnerabilities_found,
                 "patches_applied": report.patches_applied.len(),
-                "cursor_agent_id": resp.agent.id,
+                "agent_id": resp.agent.id,
             }),
         })
     }
@@ -737,12 +737,12 @@ async fn run_architect_finalize_with_answers(
     let profile = ctx.model_config.profile_for(StageId::Architect);
 
     let resp = ctx
-        .cursor
+        .agent
         .create_agent(&prompt, &profile, CreateAgentOpts::default())
         .await?;
 
     let run = ctx
-        .cursor
+        .agent
         .wait_for_run(
             &resp.agent.id,
             &resp.run.id,
@@ -765,7 +765,7 @@ async fn run_architect_finalize_with_answers(
         artifacts: vec![spec],
         metadata: serde_json::json!({
             "phase": "finalize",
-            "cursor_agent_id": resp.agent.id,
+            "agent_id": resp.agent.id,
         }),
     })
 }

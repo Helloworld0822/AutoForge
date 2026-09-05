@@ -69,7 +69,7 @@ fn skipped(message: impl Into<String>) -> CheckResult {
     }
 }
 
-/// 외부 의존성(RabbitMQ, Redis store, Cursor, Stitch) 및 스토어 프로브 — readiness 용
+/// 외부 의존성(RabbitMQ, Redis store, Agent API, Stitch) 및 스토어 프로브 — readiness 용
 pub async fn readiness(app: &App) -> HealthReport {
     let mut checks = BTreeMap::new();
     let mut unhealthy = false;
@@ -144,16 +144,16 @@ pub async fn readiness(app: &App) -> HealthReport {
         checks.insert("redis".into(), skipped("inline mode"));
     }
 
-    if app.config.cursor_api_key.is_empty() {
+    if app.config.agent_api_key.is_empty() || app.config.agent_api_base_url.is_empty() {
         checks.insert(
-            "cursor_api".into(),
-            skipped("CURSOR_API_KEY not configured"),
+            "agent_api".into(),
+            skipped("AGENT_API_KEY/AGENT_API_BASE_URL not configured"),
         );
     } else {
-        let cursor = app.cursor.clone();
-        let (k, mut v) = timed_check("cursor_api", || {
-            let cursor = cursor.clone();
-            async move { cursor.health_check().await }
+        let agent = app.agent.clone();
+        let (k, mut v) = timed_check("agent_api", || {
+            let agent = agent.clone();
+            async move { agent.health_check().await }
         })
         .await;
         if v.status == "error" {
