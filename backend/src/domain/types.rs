@@ -9,6 +9,7 @@ use crate::services::orchestrator::DagScheduler;
 #[serde(rename_all = "snake_case")]
 pub enum StageId {
     Ingest,
+    #[serde(rename = "extract", alias = "summarize")]
     Summarize,
     Architect,
     Design,
@@ -37,7 +38,7 @@ impl StageId {
     pub fn as_str(&self) -> &'static str {
         match self {
             StageId::Ingest => "ingest",
-            StageId::Summarize => "summarize",
+            StageId::Summarize => "extract",
             StageId::Architect => "architect",
             StageId::Design => "design",
             StageId::Implement => "implement",

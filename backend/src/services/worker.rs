@@ -1,11 +1,15 @@
 use crate::clients::cursor::{CreateAgentOpts, CursorClient};
 use crate::clients::figma::FigmaClient;
+use crate::clients::model_router::{ModelRole, ModelRouter};
+use crate::clients::openrouter::{AiProvider, OpenRouterClient};
 use crate::clients::stitch::StitchClient;
 use crate::domain::{
     ArtifactRef, LanguageMode, PipelineModelConfig, ProgrammingLanguage, StageCommand, StageId,
 };
 use crate::error::{AutoForgeError, Result};
-use crate::services::architecture_qa::parse_clarification_questions;
+use crate::services::ai::{
+    complete_json, parse_json, project_spec_system, ProjectSpec, QuestionList,
+};
 use crate::services::artifacts::ArtifactStore;
 use crate::services::ingest::{ingest_devops_plan, ingest_pdf};
 use crate::services::language::{language_prompt_note, resolve_effective_language};
@@ -21,6 +25,8 @@ pub struct StageContext {
     pub command: StageCommand,
     pub artifacts: Arc<dyn ArtifactStore>,
     pub cursor: Arc<CursorClient>,
+    pub openrouter: Arc<OpenRouterClient>,
+    pub model_router: ModelRouter,
     pub stitch: Arc<StitchClient>,
     pub figma: Arc<FigmaClient>,
     pub input: Vec<ArtifactRef>,
@@ -45,6 +51,17 @@ pub struct StageOutput {
 pub trait StageExecutor: Send + Sync {
     fn stage(&self) -> StageId;
     async fn execute(&self, ctx: &StageContext) -> Result<StageOutput>;
+}
+
+async fn read_named_text(ctx: &StageContext, name: &str) -> Result<String> {
+    let artifact = ctx
+        .input
+        .iter()
+        .find(|artifact| artifact.name == name)
+        .ok_or_else(|| AutoForgeError::Ingest(format!("missing {name} artifact")))?;
+    let bytes = ctx.artifacts.get(&artifact.key).await?;
+    String::from_utf8(bytes.to_vec())
+        .map_err(|error| AutoForgeError::Ingest(format!("{name} is not UTF-8: {error}")))
 }
 
 pub struct IngestExecutor;
@@ -139,38 +156,26 @@ impl StageExecutor for SummarizeExecutor {
     }
 
     async fn execute(&self, ctx: &StageContext) -> Result<StageOutput> {
-        let prompt = build_summarize_prompt(ctx);
-        let profile = ctx.model_config.profile_for(StageId::Summarize);
-
-        let resp = ctx
-            .cursor
-            .create_agent(&prompt, &profile, CreateAgentOpts::default())
-            .await?;
-
-        let run = ctx
-            .cursor
-            .wait_for_run(
-                &resp.agent.id,
-                &resp.run.id,
-                std::time::Duration::from_secs(5),
-            )
-            .await?;
-
-        let text = run
-            .result_text()
-            .ok_or_else(|| AutoForgeError::StageFailed {
-                stage: StageId::Summarize,
-                message: "empty agent response".into(),
-            })?;
+        let raw_text = read_named_text(ctx, "raw_text.md").await?;
+        let response = complete_json(
+            &ctx.openrouter,
+            ctx.model_router.model(ModelRole::Extract),
+            project_spec_system(),
+            format!("Extract this source document into project_spec.json:\n\n{raw_text}"),
+        )
+        .await?;
+        let spec: ProjectSpec = parse_json(&response.content)?;
+        let text = serde_json::to_string_pretty(&spec)
+            .map_err(|error| AutoForgeError::OpenRouter(error.to_string()))?;
 
         let resolved =
             resolve_effective_language(ctx.language_mode, ctx.programming_language, &text);
 
-        let base = format!("projects/{}/summarize", ctx.command.project_id.0);
+        let base = format!("projects/{}/extract", ctx.command.project_id.0);
         let artifact = ctx
             .artifacts
             .put(
-                &format!("{base}/summary.json"),
+                &format!("{base}/project_spec.json"),
                 Bytes::from(text),
                 "application/json",
             )
@@ -179,8 +184,12 @@ impl StageExecutor for SummarizeExecutor {
         Ok(StageOutput {
             artifacts: vec![artifact],
             metadata: serde_json::json!({
-                "cursor_agent_id": resp.agent.id,
+                "model": response.model,
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "cost_usd": response.usage.cost_usd,
                 "programming_language": resolved.as_str(),
+                "ui_required": !spec.ui_requirements.is_empty(),
             }),
         })
     }
@@ -199,25 +208,16 @@ impl StageExecutor for ArchitectExecutor {
             return run_architect_finalize(ctx).await;
         }
 
-        let prompt = build_architect_draft_prompt(ctx);
-        let profile = ctx.model_config.profile_for(StageId::Architect);
-
-        let resp = ctx
-            .cursor
-            .create_agent(&prompt, &profile, CreateAgentOpts::default())
-            .await?;
-
-        let run = ctx
-            .cursor
-            .wait_for_run(
-                &resp.agent.id,
-                &resp.run.id,
-                std::time::Duration::from_secs(10),
-            )
-            .await?;
-
-        let text = run.result_text().unwrap_or_default();
-        let questions = parse_clarification_questions(&text).unwrap_or_default();
+        let spec = read_named_text(ctx, "project_spec.json").await?;
+        let response = complete_json(
+            &ctx.openrouter,
+            ctx.model_router.model(ModelRole::Plan),
+            "Create clarification questions from the structured project spec. Do not invent requirements.",
+            format!("project_spec.json:\n{spec}"),
+        )
+        .await?;
+        let question_list: QuestionList = parse_json(&response.content)?;
+        let questions = question_list.questions;
 
         if questions.is_empty() {
             return run_architect_finalize_with_answers(ctx, &[]).await;
@@ -252,7 +252,7 @@ impl StageExecutor for ArchitectExecutor {
             artifacts: vec![draft],
             metadata: serde_json::json!({
                 "phase": "draft",
-                "cursor_agent_id": resp.agent.id,
+                "model": response.model,
                 "questions": question_views,
                 "question_count": questions.len(),
             }),
@@ -672,59 +672,6 @@ pub fn executors() -> Vec<Arc<dyn StageExecutor>> {
     ]
 }
 
-fn build_summarize_prompt(ctx: &StageContext) -> String {
-    let inputs = &ctx.input;
-    let has_devops = inputs.iter().any(|a| a.name.starts_with("devops_plan"));
-    let devops_note = if has_devops {
-        "DevOps 계획서(devops_plan*)가 포함되어 있습니다. devops_requirements, infrastructure, ci_cd 필드를 반드시 채우세요.\n"
-    } else {
-        ""
-    };
-    let lang_note = language_prompt_note(
-        ctx.language_mode,
-        ctx.programming_language,
-        ctx.resolved_language,
-    );
-    format!(
-        "다음 외주 계획서를 분석하여 strict JSON으로 요약하세요.\n\
-         필드: title, goals[], scope, constraints[], tech_hints[], ui_requirements[], \
-         devops_requirements[], infrastructure[], ci_cd[], timeline, budget_hint, \
-         programming_language, language_rationale\n\
-         programming_language: 프로젝트에 가장 적합한 주 구현 언어 (rust|typescript|python|go|java|kotlin|swift|csharp|ruby|php)\n\
-         {lang_note}\
-         {devops_note}\
-         입력 아티팩트: {:?}",
-        inputs.iter().map(|a| &a.uri).collect::<Vec<_>>()
-    )
-}
-
-fn build_architect_draft_prompt(ctx: &StageContext) -> String {
-    let inputs = &ctx.input;
-    let has_devops = inputs.iter().any(|a| a.name.starts_with("devops_plan"));
-    let devops_note = if has_devops {
-        "DevOps 계획서를 고려하여 인프라/배포 관련 질문도 포함하세요.\n"
-    } else {
-        ""
-    };
-    let lang_note = language_prompt_note(
-        ctx.language_mode,
-        ctx.programming_language,
-        ctx.resolved_language,
-    );
-    format!(
-        "summary.json을 분석하여 아키텍처 설계 전에 사용자에게 확인이 필요한 질문 목록을 작성하세요.\n\
-         {lang_note}\
-         {devops_note}\
-         strict JSON만 출력하세요:\n\
-         {{\"questions\":[{{\"id\":\"q1\",\"text\":\"질문\",\"options\":[\"선택지1\",\"선택지2\"],\"required\":true,\"category\":\"database|auth|scale|stack|other\"}}]}}\n\
-         - 모호한 요구사항, 기술 스택 선택, 데이터 모델, 인증 방식, 배포 환경 등을 3~7개 질문으로 정리\n\
-         - options가 있으면 사용자가 선택할 수 있게 제공\n\
-         - 명확한 계획서라면 questions를 빈 배열로 반환 가능\n\
-         입력: {:?}",
-        inputs.iter().map(|a| &a.uri).collect::<Vec<_>>()
-    )
-}
-
 async fn run_architect_finalize(ctx: &StageContext) -> Result<StageOutput> {
     run_architect_finalize_with_answers(ctx, &ctx.architecture_answers).await
 }
@@ -733,24 +680,21 @@ async fn run_architect_finalize_with_answers(
     ctx: &StageContext,
     answers: &[(String, String)],
 ) -> Result<StageOutput> {
-    let prompt = build_architect_finalize_prompt(ctx, answers);
-    let profile = ctx.model_config.profile_for(StageId::Architect);
-
-    let resp = ctx
-        .cursor
-        .create_agent(&prompt, &profile, CreateAgentOpts::default())
+    let spec = read_named_text(ctx, "project_spec.json").await?;
+    let response = ctx
+        .openrouter
+        .complete(crate::clients::openrouter::AiRequest {
+            model: ctx.model_router.model(ModelRole::Plan).to_string(),
+            messages: vec![
+                crate::clients::openrouter::AiMessage { role: crate::clients::openrouter::AiRole::System, content: "Plan from project_spec.json. Return JSON with architecture, spec, tasks, and planning_meta. Keep tasks small and independent.".into() },
+                crate::clients::openrouter::AiMessage { role: crate::clients::openrouter::AiRole::User, content: format!("spec:\n{spec}\nanswers:\n{answers:?}"), },
+            ],
+            temperature: Some(0.1),
+            max_tokens: Some(16_000),
+            response_format: Some(crate::clients::openrouter::ResponseFormat { kind: "json_object".into() }),
+        })
         .await?;
-
-    let run = ctx
-        .cursor
-        .wait_for_run(
-            &resp.agent.id,
-            &resp.run.id,
-            std::time::Duration::from_secs(10),
-        )
-        .await?;
-
-    let text = run.result_text().unwrap_or_default();
+    let text = response.content.clone();
     let base = format!("projects/{}/architect", ctx.command.project_id.0);
     let spec = ctx
         .artifacts
@@ -765,45 +709,12 @@ async fn run_architect_finalize_with_answers(
         artifacts: vec![spec],
         metadata: serde_json::json!({
             "phase": "finalize",
-            "cursor_agent_id": resp.agent.id,
+            "model": response.model,
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+            "cost_usd": response.usage.cost_usd,
         }),
     })
-}
-
-fn build_architect_finalize_prompt(ctx: &StageContext, answers: &[(String, String)]) -> String {
-    let inputs = &ctx.input;
-    let has_devops = inputs.iter().any(|a| a.name.starts_with("devops_plan"));
-    let devops_note = if has_devops {
-        "DevOps 계획서를 반영하여 infrastructure.md, cicd_pipeline.md, deploy_manifest.yaml 초안도 포함하세요.\n"
-    } else {
-        ""
-    };
-    let lang_note = language_prompt_note(
-        ctx.language_mode,
-        ctx.programming_language,
-        ctx.resolved_language,
-    );
-    let answers_note = if answers.is_empty() {
-        "추가 질의응답 없이 summary.json만으로 설계하세요.\n".to_string()
-    } else {
-        let lines: Vec<String> = answers
-            .iter()
-            .map(|(id, ans)| format!("- {id}: {ans}"))
-            .collect();
-        format!(
-            "사용자가 아래 질문에 답변했습니다. 반드시 반영하세요:\n{}\n",
-            lines.join("\n")
-        )
-    };
-    format!(
-        "summary.json과 사용자 답변을 기반으로 시스템 아키텍처(architecture.md)와 상세 기획(spec.md), \
-         구현 태스크 DAG(tasks.json)를 작성하세요.\n\
-         {lang_note}\
-         {devops_note}\
-         {answers_note}\
-         입력: {:?}",
-        inputs.iter().map(|a| &a.uri).collect::<Vec<_>>()
-    )
 }
 
 fn build_design_prompt(inputs: &[ArtifactRef]) -> String {

@@ -5,6 +5,10 @@ use crate::services::quality::MAX_DEBUG_CYCLES;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+fn default_true() -> bool {
+    true
+}
+
 /// 품질 게이트 상태 — Verify ↔ Debug 루프 + SecurityPatch
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QualityGate {
@@ -76,6 +80,8 @@ pub struct DagScheduler {
     project_id: ProjectId,
     pub quality: QualityGate,
     pub architecture: ArchitectureGate,
+    #[serde(default = "default_true")]
+    pub design_required: bool,
 }
 
 impl DagScheduler {
@@ -87,6 +93,7 @@ impl DagScheduler {
             project_id: ProjectId::new(),
             quality: QualityGate::default(),
             architecture: ArchitectureGate::default(),
+            design_required: true,
         }
     }
 
@@ -161,6 +168,14 @@ impl DagScheduler {
         self.completed.insert(StageId::Architect);
     }
 
+    pub fn set_design_required(&mut self, required: bool) {
+        self.design_required = required;
+        if !required {
+            self.completed.insert(StageId::Design);
+            self.running.remove(&StageId::Design);
+        }
+    }
+
     pub fn is_awaiting_architecture_input(&self) -> bool {
         self.architecture.awaiting_answers
     }
@@ -195,7 +210,8 @@ impl DagScheduler {
                 ready.push(StageId::Architect);
             }
 
-            if !self.completed.contains(&StageId::Design)
+            if self.design_required
+                && !self.completed.contains(&StageId::Design)
                 && !self.running.contains(&StageId::Design)
             {
                 ready.push(StageId::Design);
@@ -203,7 +219,7 @@ impl DagScheduler {
         }
 
         let arch_done = self.architecture.finalized;
-        let design_done = self.completed.contains(&StageId::Design);
+        let design_done = !self.design_required || self.completed.contains(&StageId::Design);
         if arch_done
             && design_done
             && !self.completed.contains(&StageId::Implement)
@@ -382,6 +398,19 @@ mod tests {
         let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
         assert!(ready.contains(&StageId::Architect));
         assert!(ready.contains(&StageId::Design));
+    }
+
+    #[test]
+    fn backend_only_project_skips_design() {
+        let mut sched = DagScheduler::new();
+        complete_through(&mut sched, StageId::Ingest);
+        complete_through(&mut sched, StageId::Summarize);
+        sched.set_design_required(false);
+        sched.record_architect_finalized();
+
+        let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
+        assert!(!ready.contains(&StageId::Design));
+        assert!(ready.contains(&StageId::Implement));
     }
 
     #[test]

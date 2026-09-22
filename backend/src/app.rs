@@ -19,6 +19,7 @@ pub struct App {
     /// 이미지 호스팅 기능 전용 (목록 조회 등 `ArtifactStore` 트레이트에 없는 기능 포함)
     pub media: Arc<LocalArtifactStore>,
     pub cursor: Arc<crate::clients::cursor::CursorClient>,
+    pub openrouter: Arc<crate::clients::openrouter::OpenRouterClient>,
     pub stitch: Arc<crate::clients::stitch::StitchClient>,
     pub figma: Arc<crate::clients::figma::FigmaClient>,
     pub queue: Option<Arc<MessageQueue>>,
@@ -61,6 +62,10 @@ impl App {
     ) -> crate::Result<Self> {
         let cursor = Arc::new(crate::clients::cursor::CursorClient::new(
             config.cursor_api_key.clone(),
+        )?);
+        let openrouter = Arc::new(crate::clients::openrouter::OpenRouterClient::new(
+            config.openrouter_api_key.clone(),
+            config.openrouter_base_url.clone(),
         )?);
         let stitch = Arc::new(crate::clients::stitch::StitchClient::new(
             config.stitch_api_key.clone(),
@@ -112,6 +117,7 @@ impl App {
             artifacts,
             media,
             cursor,
+            openrouter,
             stitch,
             figma,
             queue,

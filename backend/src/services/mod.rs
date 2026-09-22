@@ -1,5 +1,8 @@
+pub mod ai;
 pub mod architecture_qa;
 pub mod artifacts;
+pub mod context_manager;
+pub mod cost_manager;
 pub mod daily_log;
 pub mod daily_log_notify;
 pub mod github;

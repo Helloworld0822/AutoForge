@@ -62,6 +62,8 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
         },
         artifacts: app.artifacts.clone(),
         cursor: app.cursor.clone(),
+        openrouter: app.openrouter.clone(),
+        model_router: app.config.model_router.clone(),
         stitch: app.stitch.clone(),
         figma: app.figma.clone(),
         input: accumulated,
@@ -125,6 +127,15 @@ pub fn apply_stage_output(
 
     match stage {
         StageId::Summarize => {
+            let ui_required = output
+                .metadata
+                .get("ui_required")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(true);
+            project.scheduler.set_design_required(ui_required);
+            if !ui_required {
+                project.stages.insert(StageId::Design, StageState::Skipped);
+            }
             if project.language_mode == LanguageMode::Manual {
                 if let Some(lang) = project.programming_language {
                     project.resolved_language = Some(lang);
