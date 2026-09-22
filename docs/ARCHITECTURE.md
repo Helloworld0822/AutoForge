@@ -4,12 +4,16 @@
 
 외주 프로젝트의 **계획서 PDF**를 단일 입력으로 받아, 사람 개입 없이 다음 산출물을 자동 생성한다.
 
-1. 구조화된 요약 (Sonnet)
-2. 시스템 아키텍처 + 상세 기획서 (Fable)
-3. UI 디자인 에셋 (Stitch)
-4. 구현 코드 + PR (Codex 5.3)
+1. 원문 보존형 구조화 요구사항 추출 (GPT-5.6 Luna)
+2. 시스템 아키텍처 + 상세 기획 + task DAG (Claude Sonnet 5, 필요 시 Astra)
+3. UI 요구사항이 있을 때만 디자인 에셋 (Stitch)
+4. 제한된 관련 context를 사용한 구현·검증·bounded debug (DeepSeek → Sonnet/Kimi → Opus)
 
-**핵심 제약**: Cursor는 TypeScript SDK만 공식 제공 → Rust 오케스트레이터는 **Cursor Cloud Agents REST API v1**을 직접 호출한다. Stitch는 **MCP HTTP 엔드포인트**를 호출한다.
+**핵심 설계**: OpenRouter-compatible gateway가 AI provider 중심이며, `OMNIROUTER_BASE_URL`/`OMNIROUTE_BASE_URL`은 사설 OmniRouter/OmniRoute gateway를 위한 호환 alias다. 기존 Cursor Cloud Agents REST API는 workspace checkout/patch/PR executor 호환 경로로 유지한다. Stitch는 **MCP HTTP 엔드포인트**를 호출한다.
+
+### V2 실행 흐름
+
+`ingest/raw_text.md` → `extract/project_spec.json` → `architect/{architecture.md,spec.md,tasks.json}` → 선택적 `design` → ContextManager code index/context 선택 → 기존 workspace executor 기반 implement/verify → bounded debug escalation → GitHub deliver.
 
 ---
 
@@ -26,11 +30,11 @@ flowchart TB
         API[web — Actix-web]
         ORC[orchestrator — 상태 머신]
         W1[worker: ingest]
-        W2[worker: summarize]
+        W2[worker: extract]
         W3[worker: architect]
         W4[worker: design]
         W5[worker: implement]
-        W6[worker: verify]
+        W6[worker: verify/debug]
     end
 
     subgraph Storage["영속 계층"]
@@ -40,7 +44,8 @@ flowchart TB
     end
 
     subgraph External["외부 AI 서비스"]
-        Cursor[Cursor Cloud Agents API]
+        OpenRouter[OpenRouter / OmniRouter gateway]
+        Cursor[Cursor Cloud Agents API — workspace executor]
         Stitch[Google Stitch MCP]
         GH[GitHub / GitLab]
     end
@@ -51,7 +56,8 @@ flowchart TB
     RD --> W1 & W2 & W3 & W4 & W5 & W6
     W1 & W2 & W3 & W4 & W5 & W6 --> PG
     W1 & W2 & W3 & W4 & W5 & W6 --> S3
-    W2 & W3 & W5 --> Cursor
+    W2 & W3 & W6 --> OpenRouter
+    W5 & W6 --> Cursor
     W4 --> Stitch
     W5 & W6 --> GH
 ```
@@ -68,20 +74,20 @@ flowchart TB
                     └────┬────┘
                          │
                     ┌────▼────┐
-                    │SUMMARIZE│ Sonnet — 구조화 요약 JSON
+                    │ EXTRACT │ Luna — project_spec.json
                     └────┬────┘
                          │
               ┌──────────┴──────────┐
               │                     │
          ┌────▼────┐           ┌────▼────┐
          │ARCHITECT│           │ DESIGN  │  ← 병렬 실행 가능
-         │  Fable  │           │ Stitch  │
+         │ Sonnet  │           │ Stitch  │
          └────┬────┘           └────┬────┘
               │                     │
               └──────────┬──────────┘
                          │
                     ┌────▼────┐
-                    │IMPLEMENT│ Codex 5.3 — 코드 + PR
+                    │IMPLEMENT│ DeepSeek — 코드 + PR
                     └────┬────┘
                          │
                     ┌────▼────┐
@@ -98,11 +104,12 @@ flowchart TB
 | Stage | Input Artifact | Output Artifact | Model / Tool |
 |-------|----------------|-----------------|--------------|
 | `ingest` | `plan.pdf` | `raw_text.md`, `ingest_meta.json` | lopdf + OCR fallback |
-| `summarize` | `raw_text.md` | `summary.json` | `claude-4.6-sonnet-high-thinking` |
-| `architect` | `summary.json` | `architecture.md`, `spec.md`, `tasks.json` | `claude-fable-5-thinking-high`, `mode: plan` |
-| `design` | `summary.json`, `spec.md` | `screens/`, `design_tokens.json` | Stitch MCP |
-| `implement` | `architecture.md`, `spec.md`, `screens/` | git branch + PR | `gpt-5.3-codex-high`, `mode: agent` |
-| `verify` | PR URL | `verify_report.json` | CI hooks + Codex 재시도 |
+| `summarize`/`extract` | `raw_text.md` | `project_spec.json` | `openai/gpt-5.6-luna` |
+| `architect` | `project_spec.json` | `architecture.md`, `spec.md`, `tasks.json`, `planning_meta.json` | `anthropic/claude-sonnet-5`, conditional Astra |
+| `design` | `project_spec.ui_requirements` | `screens/`, design assets | Stitch MCP, UI only |
+| `implement` | selected context + task DAG | git branch + PR | DeepSeek route + Cursor workspace executor |
+| `verify` | PR URL / workspace | `verify_report.json` | detected build/test/lint commands |
+| `debug` | compressed verify errors | debug report | DeepSeek ×2 → Sonnet/Kimi → Opus |
 | `deliver` | all artifacts | `delivery_bundle.zip` | — |
 
 ---
@@ -227,34 +234,34 @@ Worker 프로세스는 `STAGE_FILTER` env로 특정 스테이지만 처리 가�
 
 ## 5. Cursor Agent 프롬프트 전략
 
-### 5.1 Summarize (Sonnet)
+### 5.1 Extract (GPT-5.6 Luna)
 
 ```
-System: 당신은 외주 프로젝트 분석가입니다. PDF 계획서를 구조화된 JSON으로 요약하세요.
-Output schema: summary.json (strict JSON)
-Fields: title, goals[], scope, constraints[], tech_hints[], ui_requirements[], timeline, budget_hint
+System: 당신은 외주 프로젝트 분석가입니다. raw_text.md에서 사실을 손실 없이 구조화 추출하세요.
+Output schema: project_spec.json (strict JSON)
+Fields: title, project_goal, functional_requirements[], non_functional_requirements[], ui_requirements[], constraints, integrations, unknowns, contradictions, source_refs
 ```
 
 - `mode`: 기본 (agent)
 - 컨텍스트: `raw_text.md`를 prompt에 인라인 (128K 이내) 또는 artifact URL
 
-### 5.2 Architect (Fable)
+### 5.2 Architect (Claude Sonnet 5)
 
 ```
-System: 시니어 아키텍트 + PM. summary.json 기반으로 기술 아키텍처와 상세 기획을 작성하세요.
+System: 시니어 아키텍트 + PM. project_spec.json 기반으로 기술 아키텍처와 상세 기획을 작성하세요.
 Output: architecture.md (C4 + Mermaid), spec.md (유저스토리+AC), tasks.json (구현 태스크 DAG)
 ```
 
-- `mode`: `plan` (코드 수정 전 계획 수립)
+- `mode`: structured planning (코드 수정 전 계획 수립)
 - `customSubagents`: `explore` (코드베이스 탐색, repo 있을 때)
 
-### 5.3 Implement (Codex 5.3)
+### 5.3 Implement (DeepSeek V4.1)
 
 ```
 System: tasks.json 순서대로 구현. design/ 폴더의 Stitch HTML을 참고해 UI를 구현하세요.
 ```
 
-- `mode`: `agent`
+- OpenRouter model role: `code`; 실제 repo patch/PR은 기존 Cursor workspace executor가 수행
 - `repos`: 고객 repo 또는 템플릿 repo fork
 - `autoCreatePR`: true
 - `mcpServers`: Stitch MCP (디자인 에셋 참조)
@@ -288,7 +295,7 @@ System: tasks.json 순서대로 구현. design/ 폴더의 Stitch HTML을 참고�
 | 기법 | 효과 |
 |------|------|
 | Sonnet은 요약만 | 토큰 비용 최소화 |
-| Fable은 plan mode | 불필요한 코드 생성 방지 |
+| Sonnet은 structured planning | 불필요한 코드 생성 방지 |
 | Codex는 tasks.json 단위 | 스코프 제한 |
 | 모델 목록 캐시 | `/v1/models` 호출 감소 |
 
@@ -340,7 +347,7 @@ System: tasks.json 순서대로 구현. design/ 폴더의 Stitch HTML을 참고�
 |------|------|
 | PDF 파싱 실패 | OCR fallback → 수동 업로드 요청 |
 | Sonnet hallucination | JSON schema validation → 재요청 |
-| Fable 스펙 불완전 | AC 누락 감지 → 보완 프롬프트 |
+| Sonnet 스펙 불완전 | AC 누락 감지 → Astra 조건부 보완 프롬프트 |
 | Stitch 타임아웃 | 5분 timeout → 단순 프롬프트 재시도 |
 | Codex 빌드 실패 | verify 단계에서 CI 로그 피드백 루프 |
 | Cursor API rate limit | Redis delayed queue + jitter |

@@ -20,8 +20,8 @@ flowchart TD
 
 | 항목 | 내용 |
 |------|------|
-| 모델 | `gpt-5.3-codex-high` |
-| 실행 | Cursor Cloud Agent가 repo에서 직접 실행 |
+| 모델 | DeepSeek implementation route; Sonnet/Kimi and Opus only for bounded diagnosis |
+| 실행 | OpenRouter가 model role을 선택하고 기존 Cursor workspace executor가 repo에서 patch/PR 작업을 수행 |
 | 검증 명령 | `cargo check`, `cargo test`, `cargo clippy`, `cargo fmt --check` |
 | 산출물 | `verify_report.json` |
 
@@ -38,7 +38,7 @@ flowchart TD
 
 | 항목 | 내용 |
 |------|------|
-| 모델 | `gpt-5.3-codex-high` |
+| 모델 | DeepSeek V4.1 implementation route; Sonnet/Kimi and Opus bounded diagnosis |
 | 트리거 | Verify `passed: false` |
 | 동작 | 실패 테스트/린트 오류 분석 → 최소 수정 → 재검증 |
 | 재시도 | `MAX_DEBUG_CYCLES` (기본 3) |
@@ -48,7 +48,7 @@ flowchart TD
 
 | 항목 | 내용 |
 |------|------|
-| 모델 | `claude-fable-5-thinking-high` |
+| 모델 | DeepSeek patch route with configured security checks |
 | 트리거 | Verify 통과 후 |
 | 검사 | `cargo audit`, OWASP Top 10, 시크릿 스캔 |
 | 동작 | 취약 의존성 업데이트, 코드 취약점 수정 |
@@ -74,6 +74,9 @@ flowchart TD
 
 ```bash
 MAX_DEBUG_CYCLES=3   # Verify 실패 시 Debug 최대 횟수
+AI_DEEPSEEK_DEBUG_RETRIES=2
+AI_MID_DEBUG_RETRIES=1
+AI_OPUS_MAX_CALLS=1
 ```
 
 ## 실패 처리

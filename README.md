@@ -1,6 +1,6 @@
 # AutoForge — AI 외주 자동화 프로그램
 
-PDF 계획서를 업로드하면 **요약(Haiku) → 기획(Sonnet) → 디자인(Stitch) → 구현(Codex 5.3)** 파이프라인이 자동 실행됩니다.
+PDF 계획서를 업로드하면 **INGEST → EXTRACT(Luna) → PLAN(Sonnet) → DESIGN(Stitch, UI 필요 시) → CONTEXT → IMPLEMENT(DeepSeek) → VERIFY/DEBUG → DELIVER** 파이프라인이 자동 실행됩니다. OpenRouter를 기본 inference gateway로 사용하며 OmniRouter/OmniRoute-compatible base URL도 지원합니다.
 
 ## 프로젝트 구조
 
@@ -40,7 +40,7 @@ nginx/Containerfile
 
 ```bash
 cp .env.example .env
-# .env 편집 (CURSOR_API_KEY, GITHUB_TOKEN 등)
+# .env 편집 (OPENROUTER_API_KEY 또는 OmniRouter gateway, GITHUB_TOKEN 등)
 
 # Docker
 ./scripts/compose-up.sh
@@ -72,7 +72,7 @@ cd frontend && npm install && npm run dev
 
 ## GitHub 자동화
 
-`GITHUB_TOKEN` 설정 시 프라이빗 레포 자동 생성 → Cursor PR 생성 → SecurityPatch 통과 후 자동 merge.
+`GITHUB_TOKEN` 설정 시 프라이빗 레포 자동 생성 → 기존 Cursor workspace executor의 PR 생성 → SecurityPatch 통과 후 자동 merge. AI 추출·계획·진단은 OpenRouter로 라우팅됩니다.
 
 ```bash
 export GITHUB_TOKEN=ghp_xxxx
@@ -135,14 +135,15 @@ curl -X POST http://localhost/v1/images \
 전체 목록은 [.env.example](.env.example) 참고. 주요 카테고리:
 
 - **서버**: `HOST`, `PORT`, `RUST_LOG`
-- **AI API 키**: `CURSOR_API_KEY`, `STITCH_API_KEY`, Stitch Bearer (`STITCH_ACCESS_TOKEN` 또는 ADC/gcloud 자동 갱신 — [상세](docs/STITCH_ACCESS_TOKEN.md))
+- **AI API 키**: `OPENROUTER_API_KEY`/`OPENROUTER_BASE_URL` (또는 `OMNIROUTER_*`/`OMNIROUTE_*`), legacy `CURSOR_API_KEY`, `STITCH_API_KEY`, Stitch Bearer (`STITCH_ACCESS_TOKEN` 또는 ADC/gcloud 자동 갱신 — [상세](docs/STITCH_ACCESS_TOKEN.md))
+- **모델/예산**: `OPENROUTER_MODEL_*`, `AI_PROJECT_BUDGET_USD`, `AI_TASK_BUDGET_USD`, bounded debug/Astra/Opus retry 설정
 - **GitHub 자동화**: `GITHUB_TOKEN`, `GITHUB_ORG`, `GITHUB_AUTO_MERGE`
 - **보안**: `API_KEY`, `CORS_ALLOWED_ORIGINS`, `MAX_UPLOAD_BYTES` — 운영 배포 전 반드시 확인
 - **아티팩트/이미지 저장소 (로컬 디스크)**: `ARTIFACTS_DIR`, `MAX_IMAGE_BYTES`
 - **RabbitMQ (분산 모드)**: `MESSAGE_QUEUE_ENABLED`, `RABBITMQ_URL` 등 — 기본값은 단일 프로세스(false). Redis는 프로젝트 스토어/알림용
 - **Slack 알림**: `SLACK_WEBHOOK_URL` 또는 `SLACK_BOT_TOKEN`+`SLACK_CHANNEL`
 
-서버 기동 시 누락되거나 위험한 설정(예: `API_KEY` 미설정, `CURSOR_API_KEY` 비어있음)은
+서버 기동 시 누락되거나 위험한 설정(예: `API_KEY` 미설정, OpenRouter와 Cursor 키가 모두 비어있음)은
 로그에 경고로 출력됩니다.
 
 ## 운영 환경 체크리스트
