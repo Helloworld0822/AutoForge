@@ -61,6 +61,16 @@ impl ModelRouter {
             StageId::Ingest | StageId::Design | StageId::Deliver => None,
         }
     }
+
+    pub fn debug_role(&self, attempt: u8, deepseek_retries: u8, mid_retries: u8) -> ModelRole {
+        if attempt < deepseek_retries {
+            ModelRole::Code
+        } else if attempt < deepseek_retries.saturating_add(mid_retries) {
+            ModelRole::Debug
+        } else {
+            ModelRole::DebugEscalation
+        }
+    }
 }
 
 fn env_or(name: &str, default: &str) -> String {
@@ -91,5 +101,8 @@ mod tests {
             Some(ModelRole::Code)
         );
         assert_eq!(router.role_for_stage(StageId::Design), None);
+        assert_eq!(router.debug_role(0, 2, 1), ModelRole::Code);
+        assert_eq!(router.debug_role(2, 2, 1), ModelRole::Debug);
+        assert_eq!(router.debug_role(3, 2, 1), ModelRole::DebugEscalation);
     }
 }

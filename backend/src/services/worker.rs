@@ -27,6 +27,11 @@ pub struct StageContext {
     pub cursor: Arc<CursorClient>,
     pub openrouter: Arc<OpenRouterClient>,
     pub model_router: ModelRouter,
+    pub deepseek_debug_retries: u8,
+    pub mid_debug_retries: u8,
+    pub opus_max_calls: u8,
+    pub project_budget_usd: f64,
+    pub task_budget_usd: f64,
     pub stitch: Arc<StitchClient>,
     pub figma: Arc<FigmaClient>,
     pub input: Vec<ArtifactRef>,
@@ -521,7 +526,28 @@ impl StageExecutor for DebugExecutor {
             .cloned()
             .unwrap_or_else(|| serde_json::json!({ "passed": false }));
 
-        let prompt = build_debug_prompt(ctx, &verify_meta);
+        let role = ctx.model_router.debug_role(
+            ctx.command.attempt,
+            ctx.deepseek_debug_retries,
+            ctx.mid_debug_retries,
+        );
+        let diagnosis = if ctx.command.attempt >= ctx.deepseek_debug_retries {
+            let response = crate::services::ai::complete_json(
+                &ctx.openrouter,
+                ctx.model_router.model(role),
+                "Diagnose the verification failure only. Return root cause, affected files, recommended fix, risk, and additional tests.",
+                format!("verify metadata:\n{verify_meta}"),
+            )
+            .await?;
+            Some((response.content, response.model, response.usage))
+        } else {
+            None
+        };
+        let prompt = build_debug_prompt(
+            ctx,
+            &verify_meta,
+            diagnosis.as_ref().map(|value| value.0.as_str()),
+        );
         let profile = ctx.model_config.profile_for(StageId::Debug);
         let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
 
@@ -557,6 +583,9 @@ impl StageExecutor for DebugExecutor {
             artifacts: vec![artifact],
             metadata: serde_json::json!({
                 "debug_cycle": ctx.command.attempt,
+                "debug_role": format!("{role:?}"),
+                "diagnosis_model": diagnosis.as_ref().map(|value| value.1.clone()),
+                "diagnosis_usage": diagnosis.as_ref().map(|value| &value.2),
                 "cursor_agent_id": resp.agent.id,
             }),
         })
@@ -763,7 +792,11 @@ fn build_verify_prompt(ctx: &StageContext) -> String {
     )
 }
 
-fn build_debug_prompt(ctx: &StageContext, verify_meta: &serde_json::Value) -> String {
+fn build_debug_prompt(
+    ctx: &StageContext,
+    verify_meta: &serde_json::Value,
+    diagnosis: Option<&str>,
+) -> String {
     format!(
         "verify_report.json의 실패 항목을 분석하고 자동으로 디버깅·수정하세요.\n\
          1. 실패한 테스트/린트 오류의 근본 원인 파악\n\
@@ -771,6 +804,7 @@ fn build_debug_prompt(ctx: &StageContext, verify_meta: &serde_json::Value) -> St
          3. 수정 후 cargo test / clippy 재실행\n\
          4. strict JSON debug_report 출력: {{ fixes_applied: [], files_changed: [], summary, resolved_errors }}\n\
          Verify 결과: {verify_meta}\n\
+         중간 진단(있는 경우)을 최소 패치에 반영하세요: {diagnosis:?}\n\
          PR: {:?}",
         ctx.pr_url
     )

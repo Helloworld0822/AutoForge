@@ -58,12 +58,21 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
         command: crate::domain::StageCommand {
             project_id: project.id.clone(),
             stage,
-            attempt: 0,
+            attempt: if stage == StageId::Debug {
+                project.scheduler.quality.debug_cycles
+            } else {
+                0
+            },
         },
         artifacts: app.artifacts.clone(),
         cursor: app.cursor.clone(),
         openrouter: app.openrouter.clone(),
         model_router: app.config.model_router.clone(),
+        deepseek_debug_retries: app.config.ai_deepseek_debug_retries,
+        mid_debug_retries: app.config.ai_mid_debug_retries,
+        opus_max_calls: app.config.ai_opus_max_calls,
+        project_budget_usd: app.config.ai_project_budget_usd,
+        task_budget_usd: app.config.ai_task_budget_usd,
         stitch: app.stitch.clone(),
         figma: app.figma.clone(),
         input: accumulated,
