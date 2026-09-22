@@ -93,9 +93,11 @@ impl Config {
             cursor_api_key: env::var("CURSOR_API_KEY").unwrap_or_default(),
             openrouter_api_key: env::var("OPENROUTER_API_KEY")
                 .or_else(|_| env::var("OMNIROUTER_API_KEY"))
+                .or_else(|_| env::var("OMNIROUTE_API_KEY"))
                 .unwrap_or_default(),
             openrouter_base_url: env::var("OPENROUTER_BASE_URL")
                 .or_else(|_| env::var("OMNIROUTER_BASE_URL"))
+                .or_else(|_| env::var("OMNIROUTE_BASE_URL"))
                 .unwrap_or_else(|_| "https://openrouter.ai/api/v1".into()),
             model_router: crate::clients::model_router::ModelRouter::from_env(),
             ai_project_budget_usd: env::var("AI_PROJECT_BUDGET_USD")

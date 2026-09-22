@@ -74,7 +74,7 @@ pub struct ModelParam {
 impl ModelProfile {
     pub fn summarize() -> Self {
         Self {
-            model_id: "claude-haiku-4-5".into(),
+            model_id: "openai/gpt-5.6-luna".into(),
             mode: AgentMode::Agent,
             params: vec![],
         }
@@ -82,7 +82,7 @@ impl ModelProfile {
 
     pub fn architect() -> Self {
         Self {
-            model_id: "claude-sonnet-4-6".into(),
+            model_id: "anthropic/claude-sonnet-5".into(),
             mode: AgentMode::Plan,
             params: vec![],
         }
@@ -90,7 +90,7 @@ impl ModelProfile {
 
     pub fn implement() -> Self {
         Self {
-            model_id: "gpt-5.3-codex".into(),
+            model_id: "deepseek/deepseek-v4.1-flash".into(),
             mode: AgentMode::Agent,
             params: vec![],
         }
@@ -98,7 +98,7 @@ impl ModelProfile {
 
     pub fn verify() -> Self {
         Self {
-            model_id: "gpt-5.3-codex".into(),
+            model_id: "deepseek/deepseek-v4.1-flash".into(),
             mode: AgentMode::Agent,
             params: vec![],
         }
@@ -106,7 +106,7 @@ impl ModelProfile {
 
     pub fn debug() -> Self {
         Self {
-            model_id: "gpt-5.3-codex".into(),
+            model_id: "deepseek/deepseek-v4.1-flash".into(),
             mode: AgentMode::Agent,
             params: vec![],
         }
@@ -114,7 +114,7 @@ impl ModelProfile {
 
     pub fn security_patch() -> Self {
         Self {
-            model_id: "claude-fable-5".into(),
+            model_id: "anthropic/claude-sonnet-5".into(),
             mode: AgentMode::Agent,
             params: vec![],
         }

@@ -10,9 +10,9 @@ const STAGE_FIELDS: {
 }[] = [
   {
     key: 'summarize',
-    stage: 'summarize',
-    label: 'Summarize',
-    description: 'PDF 계획서 요약',
+    stage: 'extract',
+    label: 'Extract',
+    description: 'PDF 요구사항 구조화 추출',
   },
   {
     key: 'architect',
@@ -222,6 +222,6 @@ export function resolveStageModel(
   }
   if (stage === 'ingest' || stage === 'deliver') return undefined;
 
-  const key = stage as keyof PipelineModelConfig;
+  const key = (stage === 'extract' ? 'summarize' : stage) as keyof PipelineModelConfig;
   return (config?.[key] as string | undefined) ?? (defaults?.[key] as string | undefined);
 }

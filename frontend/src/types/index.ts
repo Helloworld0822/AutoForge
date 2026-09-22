@@ -32,7 +32,7 @@ export interface ArchitectureClarification {
 
 export type StageId =
   | 'ingest'
-  | 'summarize'
+  | 'extract'
   | 'architect'
   | 'design'
   | 'implement'
@@ -171,36 +171,36 @@ export const STAGE_META: Record<
   { label: string; description: string; model?: string }
 > = {
   ingest: { label: 'Ingest', description: 'PDF 계획서 파싱 및 저장' },
-  summarize: {
-    label: 'Summarize',
-    description: '계획서 구조화 요약',
-    model: 'Haiku',
+  extract: {
+    label: 'Extract',
+    description: '계획서 요구사항 구조화 추출',
+    model: 'GPT-5.6 Luna',
   },
   architect: {
     label: 'Architect',
     description: '시스템 아키텍처 & 상세 기획',
-    model: 'Sonnet',
+    model: 'Claude Sonnet 5',
   },
   design: { label: 'Design', description: 'UI 디자인 (Stitch 또는 Figma)', model: 'Stitch / Figma' },
   implement: {
     label: 'Implement',
     description: '코드 구현 & PR 생성',
-    model: 'Codex 5.3',
+    model: 'DeepSeek V4.1',
   },
   verify: {
     label: 'Verify',
     description: '테스트·린트·빌드 검증',
-    model: 'Codex 5.3',
+    model: 'DeepSeek V4.1 / verifier',
   },
   debug: {
     label: 'Debug',
     description: '검증 실패 자동 수정',
-    model: 'Codex 5.3',
+    model: 'DeepSeek → Sonnet/Kimi → Opus',
   },
   security_patch: {
     label: 'Security',
     description: '보안 감사 & 패치',
-    model: 'Fable',
+    model: 'DeepSeek patch / policy checks',
   },
   deliver: { label: 'Deliver', description: 'PR 머지 & 산출물 배포' },
 };

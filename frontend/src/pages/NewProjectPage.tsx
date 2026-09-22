@@ -94,7 +94,7 @@ export function NewProjectPage() {
         </h2>
         <p className="mt-1 max-w-xl text-sm text-muted">
           PDF 외주 계획서와 함께 DevOps 계획서(CI/CD, 인프라, 배포)를 작성하거나
-          업로드할 수 있습니다.
+          <br />업로드할 수 있습니다.
         </p>
       </header>
 
@@ -201,7 +201,7 @@ export function NewProjectPage() {
             )}
             {languageMode === 'auto' && (
               <p className="text-xs text-muted">
-                Summarize 단계에서 계획서를 분석해 예상 사용자 규모, 서버 성능·비용,
+                Extract 단계에서 계획서를 구조화해 예상 사용자 규모, 서버 성능·비용,
                 배포 환경, 한국 산업 맥락(공공·대기업은 Java, 빠른 출시 스타트업은 Python 등)을
                 종합해 최적의 언어를 자동으로 결정합니다.
               </p>
@@ -309,8 +309,8 @@ export function NewProjectPage() {
           <h3 className="mb-4 font-headline text-base font-semibold">자동화 파이프라인</h3>
           <ol className="list-decimal space-y-2 pl-5 text-sm text-muted">
             <li>
-              <strong className="text-foreground">Summarize</strong> — Haiku가 PDF + DevOps
-              계획서 통합 요약
+              <strong className="text-foreground">Extract</strong> — GPT-5.6 Luna가 PDF + DevOps
+              계획서 요구사항 구조화 추출
             </li>
             <li>
               <strong className="text-foreground">Architect</strong> — Sonnet이 아키텍처 &
@@ -321,7 +321,7 @@ export function NewProjectPage() {
               디자인 파일
             </li>
             <li>
-              <strong className="text-foreground">Implement</strong> — Codex 5.3이 코드 + DevOps
+              <strong className="text-foreground">Implement</strong> — DeepSeek V4.1이 코드 + DevOps
               산출물 구현
             </li>
             <li>

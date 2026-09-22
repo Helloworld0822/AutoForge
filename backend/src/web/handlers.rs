@@ -295,11 +295,27 @@ pub async fn submit_architecture_answers(
 pub async fn list_models(app: web::Data<Arc<App>>) -> Result<HttpResponse> {
     use crate::clients::cursor::CursorClient;
 
-    let models = app
-        .cursor
-        .list_models()
-        .await
-        .unwrap_or_else(|_| CursorClient::fallback_models());
+    let models = if app.config.cursor_api_key.is_empty() {
+        vec![
+            ("openai/gpt-5.6-luna", "GPT-5.6 Luna"),
+            ("anthropic/claude-sonnet-5", "Claude Sonnet 5"),
+            ("openai/gpt-6-astra", "GPT-6 Astra"),
+            ("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
+            ("moonshotai/kimi-k3", "Kimi K3"),
+            ("anthropic/claude-opus-5", "Claude Opus 5"),
+        ]
+        .into_iter()
+        .map(|(id, name)| crate::clients::cursor::CursorModelInfo {
+            id: id.into(),
+            name: Some(name.into()),
+        })
+        .collect()
+    } else {
+        app.cursor
+            .list_models()
+            .await
+            .unwrap_or_else(|_| CursorClient::fallback_models())
+    };
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "models": models,
