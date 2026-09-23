@@ -18,4 +18,5 @@ pub mod project_watch;
 pub mod quality;
 pub mod queue;
 pub mod store;
+pub mod usage_ledger;
 pub mod worker;

@@ -1,9 +1,12 @@
 use super::extraction_cache::{fingerprint, parse_spec, usage_metadata, ExtractionCache};
-use super::{gateway_model, read_named_text, StageContext, StageExecutor, StageOutput};
+use super::{
+    complete_json_budgeted, gateway_model, read_named_text, StageContext, StageExecutor,
+    StageOutput,
+};
 use crate::clients::model_router::ModelRole;
 use crate::domain::{DevopsPlanInput, StageId};
 use crate::error::{AutoForgeError, Result};
-use crate::services::ai::{complete_json, project_spec_system, AiPurpose};
+use crate::services::ai::{project_spec_system, AiPurpose};
 use crate::services::ingest::{ingest_devops_plan, ingest_pdf};
 use crate::services::language::resolve_effective_language;
 use async_trait::async_trait;
@@ -151,11 +154,11 @@ impl StageExecutor for SummarizeExecutor {
         } else {
             let mut last_error = None;
             let mut result = None;
-            for _ in 0..2 {
+            for attempt in 0..2 {
                 let correction = last_error.as_ref().map(|error| format!("\nPrevious schema error: {error}. Return all fields with correct types.")).unwrap_or_default();
-                let response = complete_json(ctx.omniroute.as_ref(), model, project_spec_system(),
+                let response = complete_json_budgeted(ctx, model, project_spec_system(),
                     format!("Extract this source document into project_spec.json:\n\n{raw_text}{correction}"),
-                    AiPurpose::Extract, &ctx.token_policy).await?;
+                    AiPurpose::Extract, &format!("extract:{attempt}")).await?;
                 let parsed = parse_spec(&response.content);
                 let response_model = response.model.clone();
                 responses.push(response);

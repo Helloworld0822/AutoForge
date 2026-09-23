@@ -8,6 +8,7 @@ use crate::services::project_git::ProjectGitSync;
 use crate::services::project_watch::ProjectWatch;
 use crate::services::queue::MessageQueue;
 use crate::services::store::{MemoryStore, NotifyingStore, ProjectStore, RedisProjectStore};
+use crate::services::usage_ledger::{MemoryUsageLedger, RedisUsageLedger, UsageLedger};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -27,6 +28,7 @@ pub struct App {
     pub github: Option<Arc<GitHubClient>>,
     pub watch: Arc<ProjectWatch>,
     pub project_git: Option<Arc<ProjectGitSync>>,
+    pub usage_ledger: Option<Arc<dyn UsageLedger>>,
 }
 
 impl App {
@@ -35,7 +37,8 @@ impl App {
         let watch = Arc::new(ProjectWatch::memory());
         let inner: Arc<dyn ProjectStore> = Arc::new(MemoryStore::new());
         let store: Arc<dyn ProjectStore> = Arc::new(NotifyingStore::new(inner, watch.clone()));
-        Self::build(config, store, watch, None, None).await
+        let usage_ledger: Arc<dyn UsageLedger> = Arc::new(MemoryUsageLedger::new());
+        Self::build(config, store, watch, None, None, Some(usage_ledger)).await
     }
 
     /// Redis MQ 모드 (Podman 멀티 컨테이너)
@@ -50,7 +53,7 @@ impl App {
         } else {
             None
         };
-        Self::build(config, store, watch, queue, slack).await
+        Self::build(config, store, watch, queue, slack, None).await
     }
 
     async fn build(
@@ -59,6 +62,7 @@ impl App {
         watch: Arc<ProjectWatch>,
         queue: Option<Arc<MessageQueue>>,
         slack: Option<Arc<SlackNotifier>>,
+        usage_ledger: Option<Arc<dyn UsageLedger>>,
     ) -> crate::Result<Self> {
         let cursor = Arc::new(crate::clients::cursor::CursorClient::new(
             config.cursor_api_key.clone(),
@@ -111,6 +115,20 @@ impl App {
             None
         };
 
+        let usage_ledger: Option<Arc<dyn UsageLedger>> = match usage_ledger {
+            Some(ledger) => Some(ledger),
+            None => match RedisUsageLedger::connect(&config.redis_url).await {
+                Ok(ledger) => Some(Arc::new(ledger)),
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "usage ledger: redis unavailable, using in-memory ledger"
+                    );
+                    Some(Arc::new(MemoryUsageLedger::new()))
+                }
+            },
+        };
+
         Ok(Self {
             config,
             store,
@@ -125,6 +143,7 @@ impl App {
             github,
             watch,
             project_git,
+            usage_ledger,
         })
     }
 

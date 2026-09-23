@@ -107,6 +107,16 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
         artifact_signing_secret: app.config.artifact_signing_secret(),
         public_url: app.config.public_url.clone(),
         coder_artifact_max_bytes: app.config.coder_artifact_max_bytes,
+        usage_ledger: app.usage_ledger.clone(),
+        project_budget_micro_usd: crate::services::usage_ledger::usd_to_micro(
+            app.config.ai_project_budget_usd,
+        ),
+        task_budget_micro_usd: crate::services::usage_ledger::usd_to_micro(
+            app.config.ai_task_budget_usd,
+        ),
+        max_call_cost_micro_usd: crate::services::usage_ledger::usd_to_micro(
+            app.config.ai_max_call_cost_usd,
+        ),
     };
 
     executor.execute(&ctx).await

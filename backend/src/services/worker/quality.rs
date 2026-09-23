@@ -1,7 +1,10 @@
-use super::{agent_opts, quality_starting_ref, StageContext, StageExecutor, StageOutput};
+use super::{
+    agent_opts, complete_json_budgeted, quality_starting_ref, StageContext, StageExecutor,
+    StageOutput,
+};
 use crate::domain::StageId;
 use crate::error::{AutoForgeError, Result};
-use crate::services::ai::{complete_json, parse_json, AiPurpose};
+use crate::services::ai::{parse_json, AiPurpose};
 use crate::services::quality::{
     DebugReport, SecurityReport, VerifyReport, MAX_DEBUG_CYCLES, SECURITY_CHECKS, VERIFY_CHECKS,
 };
@@ -105,13 +108,13 @@ impl StageExecutor for DebugExecutor {
             ctx.mid_debug_retries,
         );
         let diagnosis = if ctx.command.attempt >= ctx.deepseek_debug_retries {
-            let response = complete_json(
-                ctx.omniroute.as_ref(),
+            let response = complete_json_budgeted(
+                ctx,
                 ctx.model_router.model(role),
                 "Diagnose the verification failure only. Return JSON with exactly root_cause, affected_files, recommended_fix, risk, and additional_tests. Do not propose or output code rewrites.",
                 evidence_json.clone(),
                 AiPurpose::Diagnosis,
-                &ctx.token_policy,
+                "diagnosis",
             )
             .await?;
             let diagnosis: Diagnosis = parse_json(&response.content)?;

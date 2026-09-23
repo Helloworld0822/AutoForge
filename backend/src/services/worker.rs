@@ -1,14 +1,17 @@
 use crate::clients::cursor::{CreateAgentOpts, CursorClient};
 use crate::clients::figma::FigmaClient;
 use crate::clients::model_router::ModelRouter;
-use crate::clients::omniroute::OmniRouteClient;
+use crate::clients::omniroute::{AiResponse, OmniRouteClient};
 use crate::clients::stitch::StitchClient;
 use crate::domain::{
     ArtifactRef, LanguageMode, PipelineModelConfig, ProgrammingLanguage, StageCommand, StageId,
 };
 use crate::error::{AutoForgeError, Result};
-use crate::services::ai::TokenPolicy;
+use crate::services::ai::{AiPurpose, TokenPolicy};
 use crate::services::artifacts::ArtifactStore;
+use crate::services::usage_ledger::{
+    usd_to_micro, CallDescriptor, CallStatus, Reservation, UsageLedger,
+};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,6 +63,10 @@ pub struct StageContext {
     pub artifact_signing_secret: String,
     pub public_url: String,
     pub coder_artifact_max_bytes: usize,
+    pub usage_ledger: Option<Arc<dyn UsageLedger>>,
+    pub project_budget_micro_usd: u64,
+    pub task_budget_micro_usd: u64,
+    pub max_call_cost_micro_usd: u64,
 }
 
 #[derive(Debug)]
@@ -98,6 +105,90 @@ fn agent_opts<'a>(repo_url: &'a str, starting_ref: &'a str) -> CreateAgentOpts<'
         auto_create_pr: Some(false),
         agent_id: None,
     }
+}
+
+/// 호출 전 예약·후 정산하는 예산 인지 완성 호출 (중복/초과 시 provider 호출 거부).
+pub async fn complete_json_budgeted(
+    ctx: &StageContext,
+    model: &str,
+    system: &str,
+    user: String,
+    purpose: AiPurpose,
+    slot: &str,
+) -> Result<AiResponse> {
+    let project_id = ctx.command.project_id.0.to_string();
+    let descriptor = CallDescriptor {
+        call_id: CallDescriptor::stable_id(
+            &project_id,
+            ctx.command.stage.as_str(),
+            ctx.command.attempt,
+            slot,
+        ),
+        project_id,
+        task_id: None,
+        stage: ctx.command.stage.as_str().to_string(),
+        model: model.to_string(),
+        purpose: format!("{purpose:?}"),
+    };
+
+    if let Some(ledger) = &ctx.usage_ledger {
+        match ledger
+            .reserve(
+                &descriptor,
+                ctx.max_call_cost_micro_usd,
+                ctx.project_budget_micro_usd,
+                ctx.task_budget_micro_usd,
+            )
+            .await?
+        {
+            Reservation::Granted => {}
+            Reservation::Duplicate(status) => {
+                return Err(AutoForgeError::StageFailed {
+                    stage: ctx.command.stage,
+                    message: format!(
+                        "duplicate AI call {} ({status:?}); refusing to re-bill",
+                        descriptor.call_id
+                    ),
+                });
+            }
+            Reservation::OverBudget {
+                limit_micro_usd,
+                would_be_micro_usd,
+                task,
+            } => {
+                return Err(AutoForgeError::StageFailed {
+                    stage: ctx.command.stage,
+                    message: format!(
+                        "AI {} budget exceeded: {would_be_micro_usd} > {limit_micro_usd} micro-USD",
+                        if task { "task" } else { "project" }
+                    ),
+                });
+            }
+        }
+    }
+
+    let result = crate::services::ai::complete_json(
+        ctx.omniroute.as_ref(),
+        model,
+        system,
+        user,
+        purpose,
+        &ctx.token_policy,
+    )
+    .await;
+
+    if let Some(ledger) = &ctx.usage_ledger {
+        let (actual, status) = match &result {
+            Ok(response) => match response.usage.cost_usd {
+                Some(cost) => (Some(usd_to_micro(cost)), CallStatus::Settled),
+                None => (None, CallStatus::OutcomeUnknown),
+            },
+            Err(_) => (None, CallStatus::OutcomeUnknown),
+        };
+        ledger.settle(&descriptor.call_id, actual, status).await?;
+    }
+
+    result
 }
 
 /// 품질 스테이지(verify/debug/security)가 main이 아니라 PR head에서 실행되도록

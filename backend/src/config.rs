@@ -85,6 +85,8 @@ pub struct Config {
     pub artifact_signing_secret: Option<String>,
     /// coder에게 노출 가능한 아티팩트 최대 크기 (bytes)
     pub coder_artifact_max_bytes: usize,
+    /// 호출별 예산 예약 상한 (USD). provider 호출 전에 보수적으로 예약한다.
+    pub ai_max_call_cost_usd: f64,
 }
 
 impl Config {
@@ -196,6 +198,10 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(256 * 1024),
+            ai_max_call_cost_usd: env::var("AI_MAX_CALL_COST_USD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.50),
         }
     }
 

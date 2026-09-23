@@ -1,10 +1,13 @@
 use super::extraction_cache::usage_metadata;
-use super::{gateway_model, read_named_text, StageContext, StageExecutor, StageOutput};
+use super::{
+    complete_json_budgeted, gateway_model, read_named_text, StageContext, StageExecutor,
+    StageOutput,
+};
 use crate::clients::model_router::ModelRole;
 use crate::clients::omniroute::AiResponse;
 use crate::domain::{ArtifactRef, StageId};
 use crate::error::{AutoForgeError, Result};
-use crate::services::ai::{complete_json, parse_json, AiPurpose, ProjectSpec, QuestionList};
+use crate::services::ai::{parse_json, AiPurpose, ProjectSpec, QuestionList};
 use crate::services::planning::{escalation_needed, parse_and_validate, PlanningBundle};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -30,8 +33,8 @@ impl StageExecutor for ArchitectExecutor {
 
 async fn request_clarifications(ctx: &StageContext) -> Result<StageOutput> {
     let project_spec = read_project_spec(ctx).await?;
-    let response = complete_json(
-        ctx.omniroute.as_ref(),
+    let response = complete_json_budgeted(
+        ctx,
         gateway_model(
             ctx.model_config.architect.as_deref(),
             ctx.model_router.model(ModelRole::Plan),
@@ -39,7 +42,7 @@ async fn request_clarifications(ctx: &StageContext) -> Result<StageOutput> {
         "Create only necessary clarification questions from project_spec. Do not invent requirements. Return {\"questions\":[{\"id\":string,\"question\":string,\"options\":[string],\"required\":boolean,\"category\":string|null}]}",
         planning_input(&project_spec, &[], None)?,
         AiPurpose::Clarify,
-        &ctx.token_policy,
+        "clarify",
     )
     .await?;
     let questions = parse_json::<QuestionList>(&response.content)?.questions;
@@ -112,8 +115,8 @@ async fn generate_valid_plan(
     let mut validated = None;
 
     for attempt in 0..VALIDATION_RETRIES {
-        let response = complete_json(
-            ctx.omniroute.as_ref(),
+        let response = complete_json_budgeted(
+            ctx,
             gateway_model(
                 ctx.model_config.architect.as_deref(),
                 ctx.model_router.model(ModelRole::Plan),
@@ -121,7 +124,7 @@ async fn generate_valid_plan(
             plan_system_prompt(),
             planning_input(project_spec, answers, validation_error.as_deref())?,
             AiPurpose::Plan,
-            &ctx.token_policy,
+            &format!("plan:{attempt}"),
         )
         .await?;
         let parsed = parse_and_validate(&response.content);
@@ -161,13 +164,13 @@ async fn generate_valid_plan(
         "validation_feedback": validation_error,
     })
     .to_string();
-    let response = complete_json(
-        ctx.omniroute.as_ref(),
+    let response = complete_json_budgeted(
+        ctx,
         ctx.model_router.model(ModelRole::PlanEscalation),
         plan_system_prompt(),
         escalation_input,
         AiPurpose::Plan,
-        &ctx.token_policy,
+        "plan_escalation",
     )
     .await?;
     let bundle = parse_and_validate(&response.content).map_err(invalid_plan)?;
