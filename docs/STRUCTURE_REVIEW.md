@@ -17,9 +17,11 @@ branch `capricorn`에서 아래 P0 항목을 구현·테스트·커밋했습니�
 - **P0#1 검증 대상 revision 고정** — 구현 PR의 브랜치/head SHA를 기록하고 verify/debug/security를 PR head에서 실행합니다. SecurityPatch가 head를 이동시키면 재검증을 강제하고, 병합은 검증된 SHA에 대해서만 조건부로 수행합니다. (`434942d`, `91bc4da`)
 - **P0#2 실패 폐쇄 게이트** — verify/security 리포트는 엄격 JSON만 허용하며, 파싱 불가·근거 없는 성공은 실패로 처리합니다. SecurityPatch 미통과 시 Deliver와 merge를 모두 차단합니다. (`7e2f2ef`)
 - **P0#4 아티팩트 전달 경계** — 허용된 생성 산출물만 30분 만료 서명 토큰으로 `/artifacts/coder`에서 전달하고, 원문 PDF/추출 텍스트/내부 상태는 allowlist로 차단합니다. 토큰 발급이 불가하면 bounded inline으로 폴백하며 자격증명 의심 내용은 제외합니다. (`97ca96a`)
+- **P0#3 원자적 usage 원장·예산 예약** — 정수 micro-USD 원장(Memory/Redis)에서 provider 호출 전에 호출별로 예약하고 응답 후 정산합니다. 동일 call_id 재전달은 재과금을 막기 위해 거부하고, 예산 초과는 provider 호출 없이 실패하며, cost 미제공은 unknown으로 예약을 유지합니다. OmniRoute 추출/계획/진단 호출이 `complete_json_budgeted`로 원장을 통과합니다. (`6933df9`)
 
-남은 P0#3(원자적 usage 원장·예산 예약)은 Redis 동시성/재시작 통합 테스트와 검증된 가격 catalog가 필요해 별도 반복으로 분리합니다.
-또한 revision/security 게이트의 MQ 이벤트 경로와 merge 거부에 대한 end-to-end 통합 테스트는 아직 없습니다. 현재 근거는 단위 테스트입니다.
+한계(P0#3): Cursor는 토큰/비용 receipt를 제공하지 않아 Cursor 구현·검증 호출은 원장에 연결되지 않았고, 그 정확 지출은 provider 상한/정산 없이는 보장할 수 없습니다. Redis 동시성/재시작 통합 테스트는 `TEST_REDIS_URL`이 있을 때만 실행되며, 없으면 skip합니다. 예약 상한은 설정된 보수적 상한(`AI_MAX_CALL_COST_USD`)이며 검증된 가격 catalog는 아직 없습니다.
+
+미검증 항목: revision/security 게이트와 예산 초과의 MQ 이벤트 경로 end-to-end 통합 테스트와 실제 provider 과금 데이터 비교는 아직 없습니다. 현재 근거는 단위 테스트와 mock/Redis 통합 테스트입니다.
 
 ## 근거 있는 주요 결함
 
