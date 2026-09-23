@@ -39,7 +39,11 @@ impl StageExecutor for VerifyExecutor {
                 std::time::Duration::from_secs(15),
             )
             .await?;
-        let report = VerifyReport::parse_from_agent_text(&run.result_text().unwrap_or_default());
+        let report = VerifyReport::parse_from_agent_text(&run.result_text().unwrap_or_default())
+            .map_err(|message| AutoForgeError::StageFailed {
+                stage: StageId::Verify,
+                message,
+            })?;
         let key = format!(
             "projects/{}/verify/verify_report.json",
             ctx.command.project_id.0
@@ -194,7 +198,11 @@ impl StageExecutor for SecurityPatchExecutor {
                 std::time::Duration::from_secs(20),
             )
             .await?;
-        let report = SecurityReport::parse_from_agent_text(&run.result_text().unwrap_or_default());
+        let report = SecurityReport::parse_from_agent_text(&run.result_text().unwrap_or_default())
+            .map_err(|message| AutoForgeError::StageFailed {
+                stage: StageId::SecurityPatch,
+                message,
+            })?;
         let key = format!(
             "projects/{}/security/security_report.json",
             ctx.command.project_id.0

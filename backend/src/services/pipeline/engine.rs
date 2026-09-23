@@ -118,7 +118,7 @@ pub async fn apply_stage_output_async(
 
     let outcome = apply_stage_output(project, stage, output)?;
 
-    if stage == StageId::SecurityPatch {
+    if stage == StageId::SecurityPatch && project.scheduler.quality.security_done {
         try_auto_merge_pr(app, project).await?;
     }
 
@@ -215,6 +215,17 @@ pub fn apply_stage_output(
             project.stages.insert(StageId::Verify, StageState::Queued);
         }
         StageId::SecurityPatch => {
+            let passed = output
+                .metadata
+                .get("passed")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            if !passed {
+                project.stages.insert(stage, StageState::Failed);
+                project.scheduler.mark_failed(stage);
+                project.state = PipelineState::Failed;
+                return Ok(PipelineOutcome::Failed("security patch gate failed".into()));
+            }
             project.scheduler.record_security_done();
             project.stages.insert(stage, StageState::Completed);
         }
@@ -713,4 +724,112 @@ pub async fn run_inline(app: std::sync::Arc<App>, project_id: Uuid) -> Result<()
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{PipelineModelConfig, ProjectId};
+    use crate::services::orchestrator::DagScheduler;
+    use std::collections::HashMap;
+
+    fn project_with_verify_passed() -> Project {
+        let id = ProjectId::new();
+        let mut scheduler = DagScheduler::with_quality(id.clone(), 3);
+        scheduler.mark_completed(&StageCompleted {
+            project_id: id.clone(),
+            stage: StageId::Ingest,
+            output_artifacts: vec![],
+        });
+        scheduler.record_verify_result(true);
+        Project {
+            id,
+            name: Some("gate-test".into()),
+            repo_url: None,
+            state: PipelineState::Running,
+            stages: HashMap::new(),
+            scheduler,
+            pdf_bytes: None,
+            devops_plan: None,
+            programming_language: None,
+            language_mode: Default::default(),
+            resolved_language: None,
+            architecture_clarifications: Vec::new(),
+            stage_outputs: HashMap::new(),
+            accumulated_artifacts: Vec::new(),
+            slack_message_ts: None,
+            created_at: chrono::Utc::now(),
+            daily_logs: HashMap::new(),
+            model_config: PipelineModelConfig::default(),
+        }
+    }
+
+    fn security_output(passed: bool) -> StageOutput {
+        StageOutput {
+            artifacts: vec![],
+            metadata: serde_json::json!({ "passed": passed }),
+        }
+    }
+
+    #[test]
+    fn failing_security_report_blocks_delivery_and_merge() {
+        let mut project = project_with_verify_passed();
+        let outcome =
+            apply_stage_output(&mut project, StageId::SecurityPatch, security_output(false))
+                .expect("apply succeeds");
+
+        assert!(matches!(outcome, PipelineOutcome::Failed(_)));
+        assert_eq!(
+            project.stages.get(&StageId::SecurityPatch),
+            Some(&StageState::Failed)
+        );
+        assert_eq!(project.state, PipelineState::Failed);
+        assert!(!project.scheduler.quality.security_done);
+        let ready: Vec<_> = project
+            .scheduler
+            .ready_stages()
+            .into_iter()
+            .map(|cmd| cmd.stage)
+            .collect();
+        assert!(!ready.contains(&StageId::Deliver));
+    }
+
+    #[test]
+    fn missing_security_verdict_is_treated_as_failure() {
+        let mut project = project_with_verify_passed();
+        let outcome = apply_stage_output(
+            &mut project,
+            StageId::SecurityPatch,
+            StageOutput {
+                artifacts: vec![],
+                metadata: serde_json::json!({}),
+            },
+        )
+        .expect("apply succeeds");
+
+        assert!(matches!(outcome, PipelineOutcome::Failed(_)));
+        assert!(!project.scheduler.quality.security_done);
+    }
+
+    #[test]
+    fn passing_security_report_allows_delivery() {
+        let mut project = project_with_verify_passed();
+        let outcome =
+            apply_stage_output(&mut project, StageId::SecurityPatch, security_output(true))
+                .expect("apply succeeds");
+
+        assert!(matches!(outcome, PipelineOutcome::Continue));
+        assert_eq!(
+            project.stages.get(&StageId::SecurityPatch),
+            Some(&StageState::Completed)
+        );
+        assert!(project.scheduler.quality.security_done);
+        let ready: Vec<_> = project
+            .scheduler
+            .ready_stages()
+            .into_iter()
+            .map(|cmd| cmd.stage)
+            .collect();
+        assert!(ready.contains(&StageId::Deliver));
+    }
 }
