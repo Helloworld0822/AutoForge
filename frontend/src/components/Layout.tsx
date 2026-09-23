@@ -42,8 +42,19 @@ export function Layout() {
   }, []);
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <aside className="z-50 flex h-screen w-[260px] shrink-0 flex-col justify-between border-r border-border bg-bg-elevated px-4 py-8">
+    <div className="flex h-screen overflow-hidden max-[640px]:flex-col">
+      <nav aria-label="모바일 메뉴" className="hidden shrink-0 flex-wrap items-center gap-2 border-b border-border bg-bg-elevated px-4 py-3 max-[640px]:flex">
+        {nav.map(({ to, label }) => (
+          <Link key={to} to={to} aria-current={location.pathname === to ? 'page' : undefined}
+            className={`rounded-lg px-3 py-2 text-sm font-semibold ${location.pathname === to ? 'bg-surface-variant text-primary' : 'text-muted'}`}>
+            {label}
+          </Link>
+        ))}
+        {user?.session_login_enabled && user.authenticated && (
+          <button type="button" onClick={() => void logout()} className="ml-auto px-3 py-2 text-sm text-muted">로그아웃</button>
+        )}
+      </nav>
+      <aside className="z-50 flex h-screen w-[260px] shrink-0 flex-col justify-between border-r border-border bg-bg-elevated px-4 py-8 max-[640px]:hidden">
         <div className="flex flex-col gap-8">
           <div className="flex items-center gap-4 px-2">
             <div className="flex size-10 items-center justify-center rounded-xl bg-accent text-[#002a65] shadow-lg shadow-accent/20">
@@ -122,7 +133,7 @@ export function Layout() {
         </div>
       </aside>
 
-      <main className="custom-scrollbar flex-1 overflow-y-auto bg-bg">
+      <main className="custom-scrollbar min-w-0 flex-1 overflow-y-auto bg-bg">
         <Outlet />
       </main>
     </div>

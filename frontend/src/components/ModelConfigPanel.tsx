@@ -55,24 +55,28 @@ interface ModelConfigPanelProps {
 export function ModelConfigPanel({ value, onChange, defaultExpanded = false }: ModelConfigPanelProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [models, setModels] = useState<CursorModel[]>([]);
+  const [omnirouteModels, setOmnirouteModels] = useState<readonly CursorModel[]>([]);
   const [defaults, setDefaults] = useState<PipelineModelConfig>({});
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!expanded || models.length > 0) return;
+    if (!expanded || catalogLoaded) return;
     setLoading(true);
     listModels()
       .then((res) => {
         setModels(res.models);
+        setOmnirouteModels(res.omniroute_models);
         setDefaults(res.defaults);
+        setCatalogLoaded(true);
         setLoadError(null);
       })
       .catch((e) => {
         setLoadError(e instanceof Error ? e.message : '모델 목록 로드 실패');
       })
       .finally(() => setLoading(false));
-  }, [expanded, models.length]);
+  }, [catalogLoaded, expanded]);
 
   const setField = (key: keyof PipelineModelConfig, modelId: string) => {
     onChange({
@@ -82,9 +86,6 @@ export function ModelConfigPanel({ value, onChange, defaultExpanded = false }: M
   };
 
   const resetDefaults = () => onChange({});
-
-  const resolved = (key: keyof PipelineModelConfig) =>
-    value[key] ?? defaults[key] ?? '';
 
   return (
     <section className="mb-6 rounded-xl border border-border bg-bg-elevated p-5">
@@ -99,7 +100,7 @@ export function ModelConfigPanel({ value, onChange, defaultExpanded = false }: M
             AI 모델 설정
           </h3>
           <p className="mt-1 text-sm text-muted">
-            스테이지별 모델을 선택하세요. 비워두면 기본값이 사용됩니다.
+            Extract·Architect는 OmniRoute, 구현·품질 단계는 Cursor executor 모델을 사용합니다.
           </p>
         </div>
         <span className="material-symbols-outlined text-muted">
@@ -117,26 +118,47 @@ export function ModelConfigPanel({ value, onChange, defaultExpanded = false }: M
           )}
 
           <div className="grid gap-4 sm:grid-cols-2">
-            {STAGE_FIELDS.map(({ key, label, description }) => (
-              <label key={key} className="block text-sm">
-                <span className="font-medium text-foreground">{label}</span>
-                <span className="mb-1.5 block text-xs text-muted">{description}</span>
-                <select
-                  value={value[key] ?? ''}
-                  onChange={(e) => setField(key, e.target.value)}
-                  className="w-full rounded-lg border border-border bg-surface-container-lowest px-3 py-2 text-sm outline-none focus:border-accent"
-                >
-                  <option value="">
-                    기본값 ({resolved(key) || '…'})
-                  </option>
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name ? `${m.name} (${m.id})` : m.id}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ))}
+            {STAGE_FIELDS.map(({ key, label, description }) => {
+              const availableModels =
+                key === 'summarize' || key === 'architect' ? omnirouteModels : models;
+              const configuredModel = value[key] ?? '';
+              const hasUnlistedConfiguredModel =
+                configuredModel !== '' &&
+                !availableModels.some((model) => model.id === configuredModel);
+              const missingFromLoadedCatalog =
+                hasUnlistedConfiguredModel && catalogLoaded && !loadError;
+              const warningId = `${String(key)}-model-warning`;
+              return (
+                <label key={key} className="block text-sm">
+                  <span className="font-medium text-foreground">{label}</span>
+                  <span className="mb-1.5 block text-xs text-muted">{description}</span>
+                  <select
+                    value={configuredModel}
+                    onChange={(e) => setField(key, e.target.value)}
+                    aria-describedby={missingFromLoadedCatalog ? warningId : undefined}
+                    className="w-full rounded-lg border border-border bg-surface-container-lowest px-3 py-2 text-sm outline-none focus:border-accent"
+                  >
+                    <option value="">기본값 ({defaults[key] || (key === 'summarize' || key === 'architect' ? 'OmniRoute 역할 설정 필요' : 'Cursor 계정 기본 모델')})</option>
+                    {hasUnlistedConfiguredModel && (
+                      <option value={configuredModel}>
+                        현재 설정: {configuredModel}
+                        {missingFromLoadedCatalog ? ' (카탈로그에 없음)' : ''}
+                      </option>
+                    )}
+                    {availableModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name ? `${model.name} (${model.id})` : model.id}
+                      </option>
+                    ))}
+                  </select>
+                  {missingFromLoadedCatalog && (
+                    <span id={warningId} className="mt-1 block text-xs text-warn">
+                      현재 설정된 모델 ID가 카탈로그에 없습니다. 이 ID가 그대로 제출됩니다.
+                    </span>
+                  )}
+                </label>
+              );
+            })}
           </div>
 
           <div className="space-y-4 rounded-lg border border-border/60 bg-surface-container-lowest/40 p-4">

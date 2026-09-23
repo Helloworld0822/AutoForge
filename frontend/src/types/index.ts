@@ -163,6 +163,7 @@ export interface CursorModel {
 
 export interface ModelsListResponse {
   models: CursorModel[];
+  readonly omniroute_models: readonly CursorModel[];
   defaults: PipelineModelConfig;
 }
 
