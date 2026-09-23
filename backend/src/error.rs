@@ -6,8 +6,8 @@ pub enum AutoForgeError {
     #[error("cursor API error: {0}")]
     CursorApi(String),
 
-    #[error("OpenRouter API error: {0}")]
-    OpenRouter(String),
+    #[error("OmniRoute API error: {0}")]
+    OmniRoute(String),
 
     #[error("stitch API error: {0}")]
     StitchApi(String),

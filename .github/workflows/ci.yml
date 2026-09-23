@@ -33,6 +33,9 @@ jobs:
         with:
           workspaces: backend
 
+      - name: Install native PDF fallback
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 

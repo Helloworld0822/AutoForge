@@ -26,16 +26,13 @@ pub struct ModelRouter {
 impl ModelRouter {
     pub fn from_env() -> Self {
         Self {
-            extract: env_or("OPENROUTER_MODEL_EXTRACT", "openai/gpt-5.6-luna"),
-            plan: env_or("OPENROUTER_MODEL_PLAN", "anthropic/claude-sonnet-5"),
-            plan_escalation: env_or("OPENROUTER_MODEL_PLAN_ESCALATION", "openai/gpt-6-astra"),
-            code: env_or("OPENROUTER_MODEL_CODE", "deepseek/deepseek-v4.1-flash"),
-            debug: env_or("OPENROUTER_MODEL_DEBUG", "anthropic/claude-sonnet-5"),
-            debug_alternative: env_or("OPENROUTER_MODEL_DEBUG_ALT", "moonshotai/kimi-k3"),
-            debug_escalation: env_or(
-                "OPENROUTER_MODEL_DEBUG_ESCALATION",
-                "anthropic/claude-opus-5",
-            ),
+            extract: env_or("OMNIROUTE_MODEL_EXTRACT", ""),
+            plan: env_or("OMNIROUTE_MODEL_PLAN", ""),
+            plan_escalation: env_or("OMNIROUTE_MODEL_PLAN_ESCALATION", ""),
+            code: env_or("OMNIROUTE_MODEL_CODE", ""),
+            debug: env_or("OMNIROUTE_MODEL_DEBUG", ""),
+            debug_alternative: env_or("OMNIROUTE_MODEL_DEBUG_ALT", ""),
+            debug_escalation: env_or("OMNIROUTE_MODEL_DEBUG_ESCALATION", ""),
         }
     }
 

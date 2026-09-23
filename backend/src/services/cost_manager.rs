@@ -1,4 +1,4 @@
-use crate::clients::openrouter::TokenUsage;
+use crate::clients::omniroute::TokenUsage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

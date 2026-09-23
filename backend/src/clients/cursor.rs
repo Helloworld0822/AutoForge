@@ -170,10 +170,10 @@ impl CursorClient {
             AgentMode::Plan => "plan",
         };
 
-        let model = ModelSelection {
+        let model = (!profile.model_id.trim().is_empty()).then_some(ModelSelection {
             id: &profile.model_id,
             params: None,
-        };
+        });
 
         let repos = opts.repo_url.map(|url| {
             vec![RepoConfig {
@@ -184,7 +184,7 @@ impl CursorClient {
 
         let body = CreateAgentRequest {
             prompt: Prompt { text: prompt_text },
-            model: Some(model),
+            model,
             mode: Some(mode),
             repos,
             auto_create_pr: opts.auto_create_pr,

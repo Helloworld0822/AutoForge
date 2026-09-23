@@ -66,11 +66,13 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
         },
         artifacts: app.artifacts.clone(),
         cursor: app.cursor.clone(),
-        openrouter: app.openrouter.clone(),
+        omniroute: app.omniroute.clone(),
         model_router: app.config.model_router.clone(),
-        deepseek_debug_retries: app.config.ai_deepseek_debug_retries,
-        mid_debug_retries: app.config.ai_mid_debug_retries,
-        opus_max_calls: app.config.ai_opus_max_calls,
+        token_policy: app.config.token_policy.clone(),
+        astra_max_calls: app.config.ai_astra_max_calls.min(1),
+        deepseek_debug_retries: app.config.ai_deepseek_debug_retries.min(2),
+        mid_debug_retries: app.config.ai_mid_debug_retries.min(1),
+        opus_max_calls: app.config.ai_opus_max_calls.min(1),
         project_budget_usd: app.config.ai_project_budget_usd,
         task_budget_usd: app.config.ai_task_budget_usd,
         stitch: app.stitch.clone(),
@@ -129,9 +131,7 @@ pub fn apply_stage_output(
     stage: StageId,
     output: StageOutput,
 ) -> Result<PipelineOutcome> {
-    project
-        .accumulated_artifacts
-        .extend(output.artifacts.clone());
+    super::artifact_merge::merge(&mut project.accumulated_artifacts, &output.artifacts);
     project.stage_outputs.insert(stage, output.metadata.clone());
 
     match stage {

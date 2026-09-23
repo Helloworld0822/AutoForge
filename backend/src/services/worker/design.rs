@@ -1,4 +1,4 @@
-use super::{StageContext, StageExecutor, StageOutput};
+use super::{read_named_text, StageContext, StageExecutor, StageOutput};
 use crate::domain::{ArtifactRef, StageId};
 use crate::error::{AutoForgeError, Result};
 use async_trait::async_trait;
@@ -13,15 +13,24 @@ impl StageExecutor for DesignExecutor {
     }
 
     async fn execute(&self, ctx: &StageContext) -> Result<StageOutput> {
+        let spec: crate::services::ai::ProjectSpec =
+            crate::services::ai::parse_json(&read_named_text(ctx, "project_spec.json").await?)?;
+        if spec.ui_requirements.is_empty() {
+            return Ok(StageOutput {
+                artifacts: vec![],
+                metadata: serde_json::json!({"skipped": true, "reason": "no UI requirements"}),
+            });
+        }
         if ctx.model_config.uses_figma_design() {
             return execute_figma(ctx).await;
         }
-        execute_stitch(ctx).await
+        execute_stitch(ctx, &spec.ui_requirements).await
     }
 }
 
-async fn execute_stitch(ctx: &StageContext) -> Result<StageOutput> {
-    let prompt = build_prompt(&ctx.input);
+async fn execute_stitch(ctx: &StageContext, ui_requirements: &[String]) -> Result<StageOutput> {
+    let prompt = build_prompt(ui_requirements)?;
+    ctx.token_policy.check_input("Stitch UI design", &prompt)?;
     let device_type = ctx.model_config.design_device_type();
     let existing_project = ctx
         .stage_outputs
@@ -132,12 +141,21 @@ fn slugify_filename(name: &str) -> String {
     }
 }
 
-fn build_prompt(inputs: &[ArtifactRef]) -> String {
-    format!(
-        "ui_requirements를 반영한 모던 UI 대시보드를 디자인하세요.\n입력: {:?}",
-        inputs
-            .iter()
-            .map(|artifact| &artifact.uri)
-            .collect::<Vec<_>>()
-    )
+fn build_prompt(ui_requirements: &[String]) -> Result<String> {
+    let requirements = serde_json::to_string(ui_requirements)
+        .map_err(|error| AutoForgeError::Internal(error.to_string()))?;
+    Ok(format!("Design the requested UI. Preserve explicit accessibility, style and design-token requirements. Do not invent screens or features. ui_requirements: {requirements}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stitch_prompt_contains_only_ui_requirements() {
+        let prompt = build_prompt(&["Accessible dark theme login screen".into()]).expect("prompt");
+        assert!(prompt.contains("Accessible dark theme"));
+        assert!(!prompt.contains("plan.pdf"));
+        assert!(!prompt.contains("raw_text.md"));
+    }
 }

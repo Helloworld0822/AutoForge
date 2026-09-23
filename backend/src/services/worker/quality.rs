@@ -1,11 +1,16 @@
 use super::{agent_opts, StageContext, StageExecutor, StageOutput};
 use crate::domain::StageId;
 use crate::error::{AutoForgeError, Result};
+use crate::services::ai::{complete_json, parse_json, AiPurpose};
 use crate::services::quality::{
-    DebugReport, SecurityReport, VerifyReport, SECURITY_CHECKS, VERIFY_CHECKS,
+    DebugReport, SecurityReport, VerifyReport, MAX_DEBUG_CYCLES, SECURITY_CHECKS, VERIFY_CHECKS,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
+
+mod debug_context;
+mod diagnosis;
+use diagnosis::Diagnosis;
 
 pub struct VerifyExecutor;
 
@@ -67,29 +72,45 @@ impl StageExecutor for DebugExecutor {
     }
 
     async fn execute(&self, ctx: &StageContext) -> Result<StageOutput> {
+        let max_attempts = ctx
+            .deepseek_debug_retries
+            .saturating_add(ctx.mid_debug_retries)
+            .saturating_add(ctx.opus_max_calls)
+            .min(MAX_DEBUG_CYCLES);
+        if ctx.command.attempt >= max_attempts {
+            return Err(AutoForgeError::StageFailed {
+                stage: StageId::Debug,
+                message: format!(
+                    "debug attempt {} exceeds the configured maximum of {max_attempts}",
+                    ctx.command.attempt
+                ),
+            });
+        }
         let repo_url = ctx
             .repo_url
             .as_deref()
             .ok_or_else(|| AutoForgeError::BadRequest("repo_url required for debug".into()))?;
-        let verify_meta = ctx
-            .stage_outputs
-            .get(&StageId::Verify)
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({ "passed": false }));
+        let evidence =
+            debug_context::load(ctx.artifacts.as_ref(), &ctx.command.project_id, &ctx.input)
+                .await?;
+        let evidence_json = evidence.json()?;
         let role = ctx.model_router.debug_role(
             ctx.command.attempt,
             ctx.deepseek_debug_retries,
             ctx.mid_debug_retries,
         );
         let diagnosis = if ctx.command.attempt >= ctx.deepseek_debug_retries {
-            let response = crate::services::ai::complete_json(
-                &ctx.openrouter,
+            let response = complete_json(
+                ctx.omniroute.as_ref(),
                 ctx.model_router.model(role),
-                "Diagnose the verification failure only. Return root cause, affected files, recommended fix, risk, and additional tests.",
-                format!("verify metadata:\n{verify_meta}"),
+                "Diagnose the verification failure only. Return JSON with exactly root_cause, affected_files, recommended_fix, risk, and additional_tests. Do not propose or output code rewrites.",
+                evidence_json.clone(),
+                AiPurpose::Diagnosis,
+                &ctx.token_policy,
             )
             .await?;
-            Some((response.content, response.model, response.usage))
+            let diagnosis: Diagnosis = parse_json(&response.content)?;
+            Some((diagnosis.bounded(), response.model, response.usage))
         } else {
             None
         };
@@ -100,8 +121,8 @@ impl StageExecutor for DebugExecutor {
             .create_agent(
                 &build_debug_prompt(
                     ctx,
-                    &verify_meta,
-                    diagnosis.as_ref().map(|value| value.0.as_str()),
+                    &evidence_json,
+                    diagnosis.as_ref().map(|value| &value.0),
                 ),
                 &profile,
                 opts,
@@ -117,7 +138,7 @@ impl StageExecutor for DebugExecutor {
             .await?;
         let text = run.result_text().unwrap_or_default();
         let report = DebugReport {
-            fixes_applied: vec!["auto-debug via Codex".into()],
+            fixes_applied: vec![],
             files_changed: vec![],
             summary: text.chars().take(300).collect(),
             resolved_errors: 0,
@@ -209,11 +230,11 @@ fn build_verify_prompt(ctx: &StageContext) -> String {
 
 fn build_debug_prompt(
     ctx: &StageContext,
-    verify_meta: &serde_json::Value,
-    diagnosis: Option<&str>,
+    evidence_json: &str,
+    diagnosis: Option<&Diagnosis>,
 ) -> String {
     format!(
-        "verify_report.json의 실패 항목을 분석하고 자동으로 디버깅·수정하세요.\n1. 실패한 테스트/린트 오류의 근본 원인 파악\n2. 최소 변경으로 수정 (regression 방지)\n3. 수정 후 cargo test / clippy 재실행\n4. strict JSON debug_report 출력: {{ fixes_applied: [], files_changed: [], summary, resolved_errors }}\nVerify 결과: {verify_meta}\n중간 진단(있는 경우)을 최소 패치에 반영하세요: {diagnosis:?}\nPR: {:?}",
+        "verify_report.json의 실패 항목을 분석하고 자동으로 디버깅·수정하세요.\n1. 실패한 테스트/린트 오류의 근본 원인 파악\n2. 최소 변경으로 수정 (regression 방지)\n3. 수정 후 cargo test / clippy 재실행\n4. strict JSON debug_report 출력: {{ fixes_applied: [], files_changed: [], summary, resolved_errors }}\n압축된 verify 증거: {evidence_json}\n중간 진단(있는 경우)을 최소 패치에 반영하세요: {diagnosis:?}\nPR: {:?}",
         ctx.pr_url
     )
 }

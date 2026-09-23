@@ -26,11 +26,19 @@ pub fn resolve_effective_language(
 
 pub fn parse_language_from_summary(summary_text: &str) -> Option<ProgrammingLanguage> {
     let value: Value = serde_json::from_str(summary_text).ok()?;
-    let raw = value
+    let legacy = value
         .get("programming_language")
         .or_else(|| value.get("recommended_language"))
-        .and_then(|v| v.as_str())?;
-    ProgrammingLanguage::from_str_loose(raw)
+        .and_then(|v| v.as_str())
+        .and_then(ProgrammingLanguage::from_str_loose);
+    legacy.or_else(|| {
+        value
+            .get("preferred_stack")?
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_str)
+            .find_map(ProgrammingLanguage::from_str_loose)
+    })
 }
 
 /// Auto 모드에서 LLM이 구현 언어를 고를 때 참고할 종합 기준.
@@ -104,5 +112,15 @@ mod tests {
             r#"{"programming_language":"go"}"#,
         );
         assert_eq!(lang, ProgrammingLanguage::Go);
+    }
+
+    #[test]
+    fn auto_mode_preserves_project_spec_preferred_stack() {
+        let lang = resolve_effective_language(
+            LanguageMode::Auto,
+            None,
+            r#"{"preferred_stack":["PostgreSQL","Rust"]}"#,
+        );
+        assert_eq!(lang, ProgrammingLanguage::Rust);
     }
 }

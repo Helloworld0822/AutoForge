@@ -1,3 +1,4 @@
+mod artifact_merge;
 pub mod engine;
 pub mod mq;
 

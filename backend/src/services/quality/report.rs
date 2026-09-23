@@ -91,7 +91,7 @@ impl SecurityReport {
     }
 }
 
-pub const MAX_DEBUG_CYCLES: u8 = 3;
+pub const MAX_DEBUG_CYCLES: u8 = 4;
 
 pub const VERIFY_CHECKS: &[&str] = &[
     "cargo check",

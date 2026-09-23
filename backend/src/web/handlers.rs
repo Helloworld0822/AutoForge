@@ -296,30 +296,22 @@ pub async fn list_models(app: web::Data<Arc<App>>) -> Result<HttpResponse> {
     use crate::clients::cursor::CursorClient;
 
     let models = if app.config.cursor_api_key.is_empty() {
-        vec![
-            ("openai/gpt-5.6-luna", "GPT-5.6 Luna"),
-            ("anthropic/claude-sonnet-5", "Claude Sonnet 5"),
-            ("openai/gpt-6-astra", "GPT-6 Astra"),
-            ("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
-            ("moonshotai/kimi-k3", "Kimi K3"),
-            ("anthropic/claude-opus-5", "Claude Opus 5"),
-        ]
-        .into_iter()
-        .map(|(id, name)| crate::clients::cursor::CursorModelInfo {
-            id: id.into(),
-            name: Some(name.into()),
-        })
-        .collect()
+        CursorClient::fallback_models()
     } else {
         app.cursor
             .list_models()
             .await
             .unwrap_or_else(|_| CursorClient::fallback_models())
     };
+    let omniroute_models = app.omniroute.list_models().await.unwrap_or_default();
+    let mut defaults = PipelineModelConfig::defaults_view();
+    defaults.summarize = Some(app.config.model_router.extract.clone());
+    defaults.architect = Some(app.config.model_router.plan.clone());
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "models": models,
-        "defaults": PipelineModelConfig::defaults_view(),
+        "omniroute_models": omniroute_models,
+        "defaults": defaults,
     })))
 }
 

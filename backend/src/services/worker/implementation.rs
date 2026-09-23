@@ -80,7 +80,43 @@ fn build_prompt(ctx: &StageContext) -> String {
          {language_note}{devops_note}입력: {:?}",
         ctx.input
             .iter()
+            .filter(|artifact| implementation_artifact(&artifact.name))
             .map(|artifact| &artifact.uri)
             .collect::<Vec<_>>()
     )
+}
+
+fn implementation_artifact(name: &str) -> bool {
+    matches!(
+        name,
+        "architecture.md" | "spec.md" | "tasks.json" | "project_spec.json" | "figma-design.json"
+    ) || name.starts_with("screens/")
+        || name.ends_with(".png")
+        || name.ends_with(".html")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn excludes_raw_inputs_and_internal_state_from_coder_prompt() {
+        for name in [
+            "plan.pdf",
+            "raw_text.md",
+            "devops_raw_text.md",
+            "extract_cache.json",
+            "usage.json",
+        ] {
+            assert!(!implementation_artifact(name));
+        }
+        for name in [
+            "architecture.md",
+            "spec.md",
+            "tasks.json",
+            "screens/login.html",
+        ] {
+            assert!(implementation_artifact(name));
+        }
+    }
 }

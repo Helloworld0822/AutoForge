@@ -1,14 +1,25 @@
 use crate::domain::ArtifactRef;
 use crate::error::{AutoForgeError, Result};
 use sha2::{Digest, Sha256};
-use std::io::Write;
-use std::process::{Command, Stdio};
+
+#[path = "ingest/pdf.rs"]
+mod pdf;
+#[cfg(test)]
+#[path = "ingest/tests.rs"]
+mod tests;
 
 #[derive(Debug, Clone)]
 pub struct IngestResult {
     pub raw_text: String,
     pub page_count: u32,
     pub sha256: String,
+    pub pdf_type: String,
+    pub confidence: f32,
+    pub pages_needing_ocr: Vec<u32>,
+    pub encoding: String,
+    pub extraction_method: String,
+    /// Character-count heuristic (roughly four characters per input token), not model usage.
+    pub estimated_input_tokens: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -20,77 +31,7 @@ pub struct DevopsIngestResult {
 }
 
 pub fn ingest_pdf(bytes: &[u8]) -> Result<IngestResult> {
-    let sha256 = hex::encode(Sha256::digest(bytes));
-
-    let doc = lopdf::Document::load_mem(bytes)
-        .map_err(|e| AutoForgeError::Ingest(format!("PDF parse failed: {e}")))?;
-
-    let page_count = doc.get_pages().len() as u32;
-    let mut raw_text = doc
-        .extract_text(&[])
-        .map_err(|e| AutoForgeError::Ingest(format!("text extraction failed: {e}")))?;
-
-    if raw_text.trim().is_empty() {
-        raw_text = extract_text_pdftotext(bytes)?;
-    }
-
-    Ok(IngestResult {
-        raw_text,
-        page_count,
-        sha256,
-    })
-}
-
-/// lopdf가 폰트/인코딩 때문에 빈 문자열을 반환할 때 poppler pdftotext로 재시도한다.
-fn extract_text_pdftotext(bytes: &[u8]) -> Result<String> {
-    let mut child = Command::new("pdftotext")
-        .args(["-", "-", "-layout"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                AutoForgeError::Ingest(
-                    "no extractable text — install poppler-utils (pdftotext) or use a text-based PDF"
-                        .into(),
-                )
-            } else {
-                AutoForgeError::Ingest(format!("pdftotext spawn failed: {e}"))
-            }
-        })?;
-
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| AutoForgeError::Ingest("pdftotext stdin unavailable".into()))?;
-        stdin
-            .write_all(bytes)
-            .map_err(|e| AutoForgeError::Ingest(format!("pdftotext write failed: {e}")))?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| AutoForgeError::Ingest(format!("pdftotext wait failed: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AutoForgeError::Ingest(format!(
-            "pdftotext failed: {stderr}"
-        )));
-    }
-
-    let text = String::from_utf8(output.stdout)
-        .map_err(|e| AutoForgeError::Ingest(format!("pdftotext output not UTF-8: {e}")))?;
-
-    if text.trim().is_empty() {
-        return Err(AutoForgeError::Ingest(
-            "no extractable text — scanned PDF may need OCR (use a text-based PDF export)".into(),
-        ));
-    }
-
-    Ok(text)
+    pdf::ingest_pdf(bytes)
 }
 
 /// DevOps 계획서 직접 입력 (Markdown/YAML/텍스트)
@@ -200,34 +141,4 @@ pub fn to_artifacts(result: &IngestResult, base_uri: &str) -> Vec<ArtifactRef> {
             sha256: None,
         },
     ]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rejects_empty_bytes() {
-        assert!(ingest_pdf(&[]).is_err());
-    }
-
-    #[test]
-    fn ingest_devops_markdown() {
-        let result = ingest_devops_file(b"# CI/CD\n- GitHub Actions", Some("plan.md")).unwrap();
-        assert_eq!(result.format, "markdown");
-        assert!(result.raw_text.contains("CI/CD"));
-    }
-
-    #[test]
-    fn ingest_devops_yaml() {
-        let yaml = b"apiVersion: v1\nkind: Service\nmetadata:\n  name: api";
-        let result = ingest_devops_file(yaml, Some("k8s.yaml")).unwrap();
-        assert_eq!(result.format, "yaml");
-    }
-
-    #[test]
-    fn ingest_devops_inline_text() {
-        let result = ingest_devops_text("Docker compose + nginx proxy").unwrap();
-        assert_eq!(result.source, "inline");
-    }
 }

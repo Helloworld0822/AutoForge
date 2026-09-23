@@ -21,9 +21,10 @@ pub struct Config {
     pub host: String,
     pub port: u16,
     pub cursor_api_key: String,
-    pub openrouter_api_key: String,
-    pub openrouter_base_url: String,
+    pub omniroute_api_key: String,
+    pub omniroute_base_url: String,
     pub model_router: crate::clients::model_router::ModelRouter,
+    pub token_policy: crate::services::ai::TokenPolicy,
     pub ai_project_budget_usd: f64,
     pub ai_task_budget_usd: f64,
     pub ai_deepseek_debug_retries: u8,
@@ -91,15 +92,11 @@ impl Config {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(8080),
             cursor_api_key: env::var("CURSOR_API_KEY").unwrap_or_default(),
-            openrouter_api_key: env::var("OPENROUTER_API_KEY")
-                .or_else(|_| env::var("OMNIROUTER_API_KEY"))
-                .or_else(|_| env::var("OMNIROUTE_API_KEY"))
-                .unwrap_or_default(),
-            openrouter_base_url: env::var("OPENROUTER_BASE_URL")
-                .or_else(|_| env::var("OMNIROUTER_BASE_URL"))
-                .or_else(|_| env::var("OMNIROUTE_BASE_URL"))
-                .unwrap_or_else(|_| "https://openrouter.ai/api/v1".into()),
+            omniroute_api_key: env::var("OMNIROUTE_API_KEY").unwrap_or_default(),
+            omniroute_base_url: env::var("OMNIROUTE_BASE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:20128/v1".into()),
             model_router: crate::clients::model_router::ModelRouter::from_env(),
+            token_policy: crate::services::ai::TokenPolicy::from_env(),
             ai_project_budget_usd: env::var("AI_PROJECT_BUDGET_USD")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -142,7 +139,7 @@ impl Config {
             max_debug_cycles: env::var("MAX_DEBUG_CYCLES")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(3),
+                .unwrap_or(4),
             redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into()),
             rabbitmq_url: env::var("RABBITMQ_URL")
                 .unwrap_or_else(|_| "amqp://guest:guest@127.0.0.1:5672/".into()),
@@ -228,8 +225,8 @@ impl Config {
     /// 필수/권장 설정 누락을 점검하고 경고를 남긴다. 서버는 계속 기동하되
     /// 운영자가 로그에서 즉시 문제를 인지할 수 있도록 한다.
     pub fn validate_and_warn(&self) {
-        if self.openrouter_api_key.is_empty() && self.cursor_api_key.is_empty() {
-            tracing::warn!("OPENROUTER_API_KEY is not set — OpenRouter AI stages will fail");
+        if self.omniroute_api_key.is_empty() {
+            tracing::warn!("OMNIROUTE_API_KEY is not set — OmniRoute AI stages will fail");
         }
         if self.stitch_api_key.is_empty() && !stitch_bearer_available(&self.stitch_access_token) {
             tracing::warn!(
