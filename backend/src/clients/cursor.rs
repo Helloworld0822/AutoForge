@@ -135,6 +135,8 @@ pub struct GitResult {
 pub struct GitBranch {
     pub name: Option<String>,
     pub pr_url: Option<String>,
+    #[serde(default)]
+    pub sha: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

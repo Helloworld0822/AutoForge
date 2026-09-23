@@ -40,18 +40,32 @@ impl StageExecutor for ImplementExecutor {
             )
             .await?;
 
-        let pr_url = run
+        let branch = run
             .result
             .and_then(|result| result.git)
             .and_then(|git| git.branches)
-            .and_then(|branches| branches.into_iter().next())
-            .and_then(|branch| branch.pr_url);
+            .and_then(|branches| branches.into_iter().find(|branch| branch.pr_url.is_some()));
+
+        let pr_url = branch.as_ref().and_then(|branch| branch.pr_url.clone());
+        let pr_branch = branch.as_ref().and_then(|branch| branch.name.clone());
+        let head_sha = branch.as_ref().and_then(|branch| branch.sha.clone());
+
+        if pr_url.is_none() || pr_branch.is_none() {
+            return Err(AutoForgeError::StageFailed {
+                stage: StageId::Implement,
+                message: "cursor run completed without a pull request branch; \
+                          verify/debug/security require a PR head to check"
+                    .into(),
+            });
+        }
 
         Ok(StageOutput {
             artifacts: vec![],
             metadata: serde_json::json!({
                 "cursor_agent_id": response.agent.id,
                 "pr_url": pr_url,
+                "pr_branch": pr_branch,
+                "head_sha": head_sha,
             }),
         })
     }

@@ -1,4 +1,4 @@
-use super::{agent_opts, StageContext, StageExecutor, StageOutput};
+use super::{agent_opts, quality_starting_ref, StageContext, StageExecutor, StageOutput};
 use crate::domain::StageId;
 use crate::error::{AutoForgeError, Result};
 use crate::services::ai::{complete_json, parse_json, AiPurpose};
@@ -26,7 +26,8 @@ impl StageExecutor for VerifyExecutor {
             .as_deref()
             .ok_or_else(|| AutoForgeError::BadRequest("repo_url required for verify".into()))?;
         let profile = ctx.model_config.profile_for(StageId::Verify);
-        let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
+        let starting_ref = quality_starting_ref(ctx, StageId::Verify)?;
+        let opts = agent_opts(repo_url, starting_ref);
         let response = ctx
             .cursor
             .create_agent(&build_verify_prompt(ctx), &profile, opts)
@@ -119,7 +120,8 @@ impl StageExecutor for DebugExecutor {
             None
         };
         let profile = ctx.model_config.profile_for(StageId::Debug);
-        let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
+        let starting_ref = quality_starting_ref(ctx, StageId::Debug)?;
+        let opts = agent_opts(repo_url, starting_ref);
         let response = ctx
             .cursor
             .create_agent(
@@ -185,7 +187,8 @@ impl StageExecutor for SecurityPatchExecutor {
             AutoForgeError::BadRequest("repo_url required for security patch".into())
         })?;
         let profile = ctx.model_config.profile_for(StageId::SecurityPatch);
-        let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
+        let starting_ref = quality_starting_ref(ctx, StageId::SecurityPatch)?;
+        let opts = agent_opts(repo_url, starting_ref);
         let response = ctx
             .cursor
             .create_agent(&build_security_prompt(ctx), &profile, opts)

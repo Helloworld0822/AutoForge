@@ -43,6 +43,18 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
         .and_then(|m| m.get("pr_url"))
         .and_then(|v| v.as_str())
         .map(String::from);
+    let pr_branch = project
+        .stage_outputs
+        .get(&StageId::Implement)
+        .and_then(|m| m.get("pr_branch"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let head_sha = project
+        .stage_outputs
+        .get(&StageId::Implement)
+        .and_then(|m| m.get("head_sha"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
     let architecture_finalize = project.scheduler.architecture.draft_done
         && !project.scheduler.architecture.awaiting_answers
@@ -84,6 +96,8 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
             .or(app.config.default_repo_url.clone()),
         stage_outputs: project.stage_outputs.clone(),
         pr_url,
+        pr_branch,
+        head_sha,
         language_mode: project.language_mode,
         programming_language: project.programming_language,
         resolved_language: project.resolved_language,

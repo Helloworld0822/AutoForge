@@ -47,6 +47,10 @@ pub struct StageContext {
     pub repo_url: Option<String>,
     pub stage_outputs: HashMap<StageId, serde_json::Value>,
     pub pr_url: Option<String>,
+    /// Implement가 생성한 PR의 head 브랜치 (verify/debug/security의 실행 기준)
+    pub pr_branch: Option<String>,
+    /// Implement가 생성한 PR의 head SHA (기록용; github 미구성 시 None일 수 있음)
+    pub head_sha: Option<String>,
     pub language_mode: LanguageMode,
     pub programming_language: Option<ProgrammingLanguage>,
     pub resolved_language: Option<ProgrammingLanguage>,
@@ -84,13 +88,25 @@ fn gateway_model<'a>(configured: Option<&'a str>, default: &'a str) -> &'a str {
         .unwrap_or(default)
 }
 
-fn agent_opts<'a>(repo_url: &'a str, _pr_url: Option<&'a str>) -> CreateAgentOpts<'a> {
+fn agent_opts<'a>(repo_url: &'a str, starting_ref: &'a str) -> CreateAgentOpts<'a> {
     CreateAgentOpts {
         repo_url: Some(repo_url),
-        starting_ref: Some("main"),
+        starting_ref: Some(starting_ref),
         auto_create_pr: Some(false),
         agent_id: None,
     }
+}
+
+/// 품질 스테이지(verify/debug/security)가 main이 아니라 PR head에서 실행되도록
+/// 시작 ref를 요구한다. PR 브랜치가 없으면 main으로 조용히 폴백하지 않고 실패한다.
+fn quality_starting_ref(ctx: &StageContext, stage: StageId) -> Result<&str> {
+    ctx.pr_branch
+        .as_deref()
+        .ok_or_else(|| AutoForgeError::StageFailed {
+            stage,
+            message: "implement PR branch is required for this stage; main must not be substituted"
+                .into(),
+        })
 }
 
 pub fn executors() -> Vec<Arc<dyn StageExecutor>> {
@@ -133,5 +149,13 @@ mod tests {
         );
         assert_eq!(gateway_model(Some("  "), "default/model"), "default/model");
         assert_eq!(gateway_model(None, "default/model"), "default/model");
+    }
+
+    #[test]
+    fn agent_opts_use_the_given_ref_and_never_create_automatically() {
+        let opts = agent_opts("https://github.com/acme/repo", "cursor/pr-123");
+        assert_eq!(opts.repo_url, Some("https://github.com/acme/repo"));
+        assert_eq!(opts.starting_ref, Some("cursor/pr-123"));
+        assert_eq!(opts.auto_create_pr, Some(false));
     }
 }
