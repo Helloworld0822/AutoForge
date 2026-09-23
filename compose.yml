@@ -12,6 +12,26 @@ x-app-env: &app-env
   QUEUE_EVENTS_STREAM: autoforge.events
   ARTIFACTS_DIR: /data/artifacts
   MAX_IMAGE_BYTES: ${MAX_IMAGE_BYTES:-10485760}
+  OMNIROUTE_API_KEY: ${OMNIROUTE_API_KEY:-}
+  OMNIROUTE_BASE_URL: ${OMNIROUTE_BASE_URL:-http://host.containers.internal:20128/v1}
+  OMNIROUTE_MODEL_EXTRACT: ${OMNIROUTE_MODEL_EXTRACT:-}
+  OMNIROUTE_MODEL_PLAN: ${OMNIROUTE_MODEL_PLAN:-}
+  OMNIROUTE_MODEL_PLAN_ESCALATION: ${OMNIROUTE_MODEL_PLAN_ESCALATION:-}
+  OMNIROUTE_MODEL_CODE: ${OMNIROUTE_MODEL_CODE:-}
+  OMNIROUTE_MODEL_DEBUG: ${OMNIROUTE_MODEL_DEBUG:-}
+  OMNIROUTE_MODEL_DEBUG_ALT: ${OMNIROUTE_MODEL_DEBUG_ALT:-}
+  OMNIROUTE_MODEL_DEBUG_ESCALATION: ${OMNIROUTE_MODEL_DEBUG_ESCALATION:-}
+  AI_MAX_INPUT_TOKENS: ${AI_MAX_INPUT_TOKENS:-30000}
+  AI_EXTRACT_OUTPUT_TOKENS: ${AI_EXTRACT_OUTPUT_TOKENS:-16000}
+  AI_CLARIFY_OUTPUT_TOKENS: ${AI_CLARIFY_OUTPUT_TOKENS:-2000}
+  AI_PLAN_OUTPUT_TOKENS: ${AI_PLAN_OUTPUT_TOKENS:-16000}
+  AI_DIAGNOSIS_OUTPUT_TOKENS: ${AI_DIAGNOSIS_OUTPUT_TOKENS:-4000}
+  AI_PROJECT_BUDGET_USD: ${AI_PROJECT_BUDGET_USD:-3.00}
+  AI_TASK_BUDGET_USD: ${AI_TASK_BUDGET_USD:-0.30}
+  AI_DEEPSEEK_DEBUG_RETRIES: ${AI_DEEPSEEK_DEBUG_RETRIES:-2}
+  AI_MID_DEBUG_RETRIES: ${AI_MID_DEBUG_RETRIES:-1}
+  AI_OPUS_MAX_CALLS: ${AI_OPUS_MAX_CALLS:-1}
+  AI_ASTRA_MAX_CALLS: ${AI_ASTRA_MAX_CALLS:-1}
   CURSOR_API_KEY: ${CURSOR_API_KEY:-}
   STITCH_API_KEY: ${STITCH_API_KEY:-}
   STITCH_ACCESS_TOKEN: ${STITCH_ACCESS_TOKEN:-}
@@ -21,7 +41,7 @@ x-app-env: &app-env
   SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
   SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
   SLACK_CHANNEL: ${SLACK_CHANNEL:-}
-  MAX_DEBUG_CYCLES: "3"
+  MAX_DEBUG_CYCLES: ${MAX_DEBUG_CYCLES:-4}
   WORKER_CONCURRENCY: "4"
   GITHUB_TOKEN: ${GITHUB_TOKEN:-}
   GITHUB_ORG: ${GITHUB_ORG:-}
@@ -38,6 +58,9 @@ x-app-env: &app-env
 
 x-app-volumes: &app-volumes
   - artifacts-data:/data/artifacts
+
+x-app-extra-hosts: &app-extra-hosts
+  - "host.containers.internal:host-gateway"
 
 x-worker-limits: &worker-limits
   deploy:
@@ -81,6 +104,7 @@ services:
       PORT: "8080"
     expose:
       - "8080"
+    extra_hosts: *app-extra-hosts
     volumes: *app-volumes
     depends_on:
       redis:
@@ -107,6 +131,7 @@ services:
       <<: *app-env
       ORCHESTRATOR_ID: orchestrator-1
     volumes: *app-volumes
+    extra_hosts: *app-extra-hosts
     depends_on:
       redis:
         condition: service_healthy
@@ -121,6 +146,7 @@ services:
     environment:
       <<: *app-env
     volumes: *app-volumes
+    extra_hosts: *app-extra-hosts
     depends_on:
       redis:
         condition: service_healthy
