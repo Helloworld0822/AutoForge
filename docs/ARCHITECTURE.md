@@ -1,353 +1,99 @@
-# AutoForge 아키텍처 설계서
-
-## 1. 목표
-
-외주 프로젝트의 **계획서 PDF**를 단일 입력으로 받아, 사람 개입 없이 다음 산출물을 자동 생성한다.
-
-1. 원문 보존형 구조화 요구사항 추출 (GPT-5.6 Luna)
-2. 시스템 아키텍처 + 상세 기획 + task DAG (Claude Sonnet 5, 필요 시 Astra)
-3. UI 요구사항이 있을 때만 디자인 에셋 (Stitch)
-4. 제한된 관련 context를 사용한 구현·검증·bounded debug (DeepSeek → Sonnet/Kimi → Opus)
-
-**핵심 설계**: OpenRouter-compatible gateway가 AI provider 중심이며, `OMNIROUTER_BASE_URL`/`OMNIROUTE_BASE_URL`은 사설 OmniRouter/OmniRoute gateway를 위한 호환 alias다. 기존 Cursor Cloud Agents REST API는 workspace checkout/patch/PR executor 호환 경로로 유지한다. Stitch는 **MCP HTTP 엔드포인트**를 호출한다.
-
-### V2 실행 흐름
-
-`ingest/raw_text.md` → `extract/project_spec.json` → `architect/{architecture.md,spec.md,tasks.json}` → 선택적 `design` → ContextManager code index/context 선택 → 기존 workspace executor 기반 implement/verify → bounded debug escalation → GitHub deliver.
-
----
-
-## 2. 시스템 컨텍스트
-
-```mermaid
-flowchart TB
-    subgraph Client["클라이언트"]
-        Web[Web Dashboard]
-        Webhook[Webhook / Slack]
-    end
-
-    subgraph AutoForge["AutoForge (Rust 프로그램)"]
-        API[web — Actix-web]
-        ORC[orchestrator — 상태 머신]
-        W1[worker: ingest]
-        W2[worker: extract]
-        W3[worker: architect]
-        W4[worker: design]
-        W5[worker: implement]
-        W6[worker: verify/debug]
-    end
-
-    subgraph Storage["영속 계층"]
-        PG[(PostgreSQL)]
-        RD[(Redis Streams)]
-        S3[(로컬 아티팩트 스토리지 / ARTIFACTS_DIR)]
-    end
-
-    subgraph External["외부 AI 서비스"]
-        OpenRouter[OpenRouter / OmniRouter gateway]
-        Cursor[Cursor Cloud Agents API — workspace executor]
-        Stitch[Google Stitch MCP]
-        GH[GitHub / GitLab]
-    end
-
-    Client --> API
-    API --> ORC
-    ORC --> RD
-    RD --> W1 & W2 & W3 & W4 & W5 & W6
-    W1 & W2 & W3 & W4 & W5 & W6 --> PG
-    W1 & W2 & W3 & W4 & W5 & W6 --> S3
-    W2 & W3 & W6 --> OpenRouter
-    W5 & W6 --> Cursor
-    W4 --> Stitch
-    W5 & W6 --> GH
-```
-
----
-
-## 3. 파이프라인 DAG
-
-순차 의존성과 병렬 가능 구간을 분리해 **극한 효율**을 달성한다.
-
-```
-                    ┌─────────┐
-                    │ INGEST  │ PDF → raw text + metadata
-                    └────┬────┘
-                         │
-                    ┌────▼────┐
-                    │ EXTRACT │ Luna — project_spec.json
-                    └────┬────┘
-                         │
-              ┌──────────┴──────────┐
-              │                     │
-         ┌────▼────┐           ┌────▼────┐
-         │ARCHITECT│           │ DESIGN  │  ← 병렬 실행 가능
-         │ Sonnet  │           │ Stitch  │
-         └────┬────┘           └────┬────┘
-              │                     │
-              └──────────┬──────────┘
-                         │
-                    ┌────▼────┐
-                    │IMPLEMENT│ DeepSeek — 코드 + PR
-                    └────┬────┘
-                         │
-                    ┌────▼────┐
-                    │ VERIFY  │ CI / 테스트 / 린트
-                    └────┬────┘
-                         │
-                    ┌────▼────┐
-                    │ DELIVER │ 산출물 패키징 + 알림
-                    └─────────┘
-```
-
-### 스테이지별 입출력
-
-| Stage | Input Artifact | Output Artifact | Model / Tool |
-|-------|----------------|-----------------|--------------|
-| `ingest` | `plan.pdf` | `raw_text.md`, `ingest_meta.json` | lopdf + OCR fallback |
-| `summarize`/`extract` | `raw_text.md` | `project_spec.json` | `openai/gpt-5.6-luna` |
-| `architect` | `project_spec.json` | `architecture.md`, `spec.md`, `tasks.json`, `planning_meta.json` | `anthropic/claude-sonnet-5`, conditional Astra |
-| `design` | `project_spec.ui_requirements` | `screens/`, design assets | Stitch MCP, UI only |
-| `implement` | selected context + task DAG | git branch + PR | DeepSeek route + Cursor workspace executor |
-| `verify` | PR URL / workspace | `verify_report.json` | detected build/test/lint commands |
-| `debug` | compressed verify errors | debug report | DeepSeek ×2 → Sonnet/Kimi → Opus |
-| `deliver` | all artifacts | `delivery_bundle.zip` | — |
-
----
-
-## 프로그램 구조 (단일 바이너리)
-
-```
-autoforge/                  # 실행 프로그램 (cargo run)
-├── src/
-│   ├── main.rs             # CLI — 기본 `serve` (Actix-web)
-│   ├── app.rs              # 전역 App 상태
-│   ├── config.rs
-│   ├── domain/             # StageId, Project, ModelProfile
-│   ├── clients/            # cursor.rs, stitch.rs
-│   ├── services/           # ingest, orchestrator, worker, pipeline
-│   └── web/                # Actix-web routes + handlers
-├── static/index.html       # 웹 대시보드
-└── migrations/             # PostgreSQL 스키마 (향후)
-```
-
-### 4.1 `domain` — 도메인 코어
-
-- `ProjectId`, `RunId`, `StageId` (newtype + UUID)
-- `PipelineState` enum (상태 머신)
-- `StageEvent` (Redis Streams 직렬화)
-- `ModelProfile` — 모델 ID·파라미터 매핑
-
-```rust
-pub enum PipelineState {
-    Pending,
-    Ingesting,
-    Summarizing,
-    Architecting,
-    Designing,
-    Implementing,
-    Verifying,
-    Delivering,
-    Completed,
-    Failed { stage: StageId, retry_count: u8 },
-}
-```
-
-### 4.2 `clients/cursor` — Cursor API 래퍼
-
-- `POST /v1/agents` — 에이전트 생성 + 초기 run
-- `POST /v1/agents/{id}/runs` — 후속 프롬프트
-- `GET /v1/agents/{id}/runs/{runId}` — 상태 폴링
-- `GET /v1/agents/{id}/runs/{runId}/stream` — SSE 스트리밍
-- `GET /v1/models` — 모델 목록 캐시 (24h TTL)
-
-**효율 패턴**:
-- `reqwest::Client` 싱글톤 + HTTP/2 connection pooling
-- SSE 스트림은 `bytes::Bytes` zero-copy 파싱
-- 동일 repo에 대한 agent는 **재사용** (conversation context 유지)
-- `agentId` 클라이언트 지정으로 멱등 생성 (`bc-{project_uuid}`)
-
-### 4.3 `clients/stitch` — Stitch MCP
-
-- Base URL: `https://stitch.googleapis.com/mcp`
-- `Project::create()` → `generate(prompt)` → `getHtml()` / `getImage()`
-- 디자인 스펙은 `summary.json`의 `ui_requirements` 필드에서 추출
-
-### 4.4 `services/ingest` — PDF 처리
-
-- 1차: `lopdf` 텍스트 추출 (빠름, zero external deps)
-- 2차 fallback: 스캔 PDF → 외부 OCR 워커 (Tesseract sidecar, optional)
-- SHA-256 해시로 중복 PDF 스킵
-
-### 4.5 `services/artifacts` — 산출물 저장 + 이미지 호스팅
-
-- 로컬 디스크 기반 (`ARTIFACTS_DIR`), Compose/Podman 환경에서는 api/worker/orchestrator가
-  공유 볼륨(`artifacts-data`)을 마운트해 파일을 공유한다
-- 이미지 호스팅 기능(`/v1/images`, `/media/{filename}`)도 동일한 저장소를 사용한다
-- 스테이지 간 전달은 **아티팩트 키/URI 참조만** (메모리에 대용량 복사 금지)
-- 여러 호스트로 확장 시에는 NFS 등 네트워크 파일시스템 또는 별도 오브젝트 스토리지 어댑터로 교체 가능
-
-### 4.6 `services/orchestrator` — 상태 머신 + 스케줄러
-
-핵심 설계: **이벤트 소싱 + 낙관적 잠금**
-
-```
-PostgreSQL: projects, runs, stage_runs (source of truth)
-Redis Streams: stage_commands (work queue, consumer group)
-```
-
-상태 전이 규칙:
-1. 스테이지 완료 → `StageCompleted` 이벤트 발행
-2. Orchestrator가 DAG 의존성 확인 → 다음 스테이지 enqueue
-3. `architect` + `design`은 `summarize` 완료 후 **동시 enqueue**
-4. `implement`는 `architect` AND `design` 모두 완료 후 시작
-
-**재시도 정책** (exponential backoff):
-- Transient API 오류: 3회, 5s → 20s → 80s
-- Agent run `FAILED`: 프롬프트 보강 후 1회 재시도
-- `verify` 실패: Codex에 `verify_report.json` 첨부 후 재구현 (최대 2회)
-
-### 4.7 `services/worker` + `services/pipeline` — 스테이지 실행
-
-각 worker는 Redis consumer group 멤버. **수평 확장** 가능.
-
-```rust
-#[async_trait]
-pub trait StageExecutor: Send + Sync {
-    fn stage(&self) -> StageId;
-    async fn execute(&self, ctx: &StageContext) -> Result<StageOutput>;
-}
-```
-
-Worker 프로세스는 `STAGE_FILTER` env로 특정 스테이지만 처리 가능 (K8s HPA 대상).
-
-### 4.8 `web` — Actix-web HTTP 서버
-
-| Method | Path | 설명 |
-|--------|------|------|
-| POST | `/v1/projects` | PDF 업로드 + 파이프라인 시작 |
-| GET | `/v1/projects/{id}` | 상태 + 산출물 목록 |
-| GET | `/v1/projects/{id}/stream` | SSE 진행률 |
-| POST | `/v1/projects/{id}/cancel` | 취소 |
-| POST | `/v1/webhooks/cursor` | Cursor webhook (v0 legacy, 준비) |
-
----
-
-## 5. Cursor Agent 프롬프트 전략
-
-### 5.1 Extract (GPT-5.6 Luna)
-
-```
-System: 당신은 외주 프로젝트 분석가입니다. raw_text.md에서 사실을 손실 없이 구조화 추출하세요.
-Output schema: project_spec.json (strict JSON)
-Fields: title, project_goal, functional_requirements[], non_functional_requirements[], ui_requirements[], constraints, integrations, unknowns, contradictions, source_refs
-```
-
-- `mode`: 기본 (agent)
-- 컨텍스트: `raw_text.md`를 prompt에 인라인 (128K 이내) 또는 artifact URL
-
-### 5.2 Architect (Claude Sonnet 5)
-
-```
-System: 시니어 아키텍트 + PM. project_spec.json 기반으로 기술 아키텍처와 상세 기획을 작성하세요.
-Output: architecture.md (C4 + Mermaid), spec.md (유저스토리+AC), tasks.json (구현 태스크 DAG)
-```
-
-- `mode`: structured planning (코드 수정 전 계획 수립)
-- `customSubagents`: `explore` (코드베이스 탐색, repo 있을 때)
-
-### 5.3 Implement (DeepSeek V4.1)
-
-```
-System: tasks.json 순서대로 구현. design/ 폴더의 Stitch HTML을 참고해 UI를 구현하세요.
-```
-
-- OpenRouter model role: `code`; 실제 repo patch/PR은 기존 Cursor workspace executor가 수행
-- `repos`: 고객 repo 또는 템플릿 repo fork
-- `autoCreatePR`: true
-- `mcpServers`: Stitch MCP (디자인 에셋 참조)
-
----
-
-## 6. 효율 최적화 포인트
-
-### 6.1 Rust 런타임
-
-| 기법 | 적용 |
-|------|------|
-| Tokio multi-thread | worker/API 분리, CPU-bound는 `spawn_blocking` |
-| Connection pooling | reqwest, sqlx, redis 단일 pool |
-| Zero-copy | `bytes::Bytes`, S3 URI 참조 전달 |
-| Release LTO | `lto = "thin"`, `codegen-units = 1` |
-| Binary size | `strip = true` |
-
-### 6.2 파이프라인
-
-| 기법 | 효과 |
-|------|------|
-| architect ∥ design | wall-clock 30~50% 단축 |
-| Agent 재사용 | 컨텍스트 재전송 비용 제거 |
-| Content-hash dedup | 동일 PDF 재처리 스킵 |
-| Stage별 HPA | implement worker만 스케일 아웃 |
-| SSE → event bus | 실시간 UI 업데이트, 폴링 제거 |
-
-### 6.3 비용
-
-| 기법 | 효과 |
-|------|------|
-| Sonnet은 요약만 | 토큰 비용 최소화 |
-| Sonnet은 structured planning | 불필요한 코드 생성 방지 |
-| Codex는 tasks.json 단위 | 스코프 제한 |
-| 모델 목록 캐시 | `/v1/models` 호출 감소 |
-
----
-
-## 7. 배포 토폴로지
-
-```
-┌──────────────────────────────────────────────┐
-│ Kubernetes / Fly.io / Railway                │
-│                                              │
-│  [api x2]  [orchestrator x1]  [workers xN]   │
-│                                              │
-│  [PostgreSQL]  [Redis]  [MinIO]              │
-└──────────────────────────────────────────────┘
-         │                    │
-         ▼                    ▼
-   Cursor Cloud API     Stitch MCP API
-   (VM per agent)       (Google Cloud)
-```
-
-- **orchestrator**: 단일 리더 (PostgreSQL advisory lock) — split-brain 방지
-- **workers**: stateless, Redis consumer group으로 at-least-once 처리
-- **api**: stateless, 로드밸런서 뒤
-
----
-
-## 8. 보안
-
-- API Key: 환경 변수 / K8s Secret / Vault
-- `envVars` (Cursor): repo별 시크릿 주입, 세션 종료 시 삭제
-- PDF: 업로드 시 바이러스 스캔 (ClamAV sidecar)
-- 고객 repo: fine-grained GitHub token, scope 최소화
-- Hook: `.cursor/hooks.json`으로 위험 shell 명령 차단
-
----
-
-## 9. 관측성
-
-- `tracing` + OpenTelemetry → Datadog / Grafana
-- 메트릭: `stage_duration_seconds`, `agent_token_usage`, `pipeline_success_rate`
-- 구조화 로그: `project_id`, `stage`, `cursor_run_id` correlation
-
----
-
-## 10. 실패 모드 & 복구
-
-| 실패 | 대응 |
-|------|------|
-| PDF 파싱 실패 | OCR fallback → 수동 업로드 요청 |
-| Sonnet hallucination | JSON schema validation → 재요청 |
-| Sonnet 스펙 불완전 | AC 누락 감지 → Astra 조건부 보완 프롬프트 |
-| Stitch 타임아웃 | 5분 timeout → 단순 프롬프트 재시도 |
-| Codex 빌드 실패 | verify 단계에서 CI 로그 피드백 루프 |
-| Cursor API rate limit | Redis delayed queue + jitter |
+# AutoForge 현재 아키텍처
+
+이 문서는 현재 실행 코드를 설명합니다. 최초 V2 목표 전체가 구현된 상태는 아닙니다.
+미연결 기능과 후속 우선순위는 [구조 평가](STRUCTURE_REVIEW.md)를 참고하세요.
+
+## 실행 구조
+
+- Rust/Actix API, React/Vite 대시보드.
+- 단일 프로세스: MemoryStore + inline scheduler.
+- Compose: Redis ProjectStore/pub-sub, RabbitMQ command/event 큐, stateless worker.
+- artifact는 로컬 파일이며 api/orchestrator/worker가 artifacts-data 볼륨을 공유합니다. PostgreSQL, Redis Streams 큐, S3/MinIO는 현재 사용하지 않습니다.
+- project Git 동기화, GitHub repo/PR/CI/merge, Slack 알림은 기존 계층을 유지합니다.
+
+## 실제 단계와 provider
+
+| 저장/API 단계 | 실행 주체 | 입력 → 출력 |
+|---|---|---|
+| ingest | 로컬 pdf-inspector, native pdftotext fallback | plan.pdf → raw_text.md, ingest_meta.json |
+| extract | OmniRoute extract | Markdown + DevOps text → project_spec.json, extract_cache.json |
+| architect | OmniRoute plan / conditional plan_escalation | compact project spec + 사용자 답변 → architecture.md, spec.md, tasks.json, planning_meta.json |
+| design | Stitch 또는 기존 Figma 경로 | UI 요구사항 → 화면 참고자료 |
+| implement | Cursor Cloud Agent | 허용된 계획/디자인 artifact URI → PR metadata |
+| verify | Cursor Cloud Agent | 저장소 검증 지시 → verify_report.json |
+| debug | Cursor patch + 필요 시 OmniRoute diagnosis | 압축한 실제 verify_report + 직전 수정 요약 → debug_report.json |
+| security_patch | Cursor Cloud Agent | 보안 검사/패치 → security_report.json |
+| deliver | 로컬 manifest | 산출물과 stage metadata → delivery_manifest.json |
+
+extract 이후 architect와 design이 실행 가능해집니다. UI 요구사항이 없으면 design은 skipped입니다.
+architect는 질문이 있으면 awaiting_input으로 정지하고 답변 후 finalize합니다.
+implement는 architect finalize와 design 완료/skip을 기다립니다.
+verify 실패 후 debug→verify가 반복되며 상한을 넘으면 failed입니다.
+기존 Rust StageId::Summarize 식별자는 유지하되 직렬화 이름은 extract이며 legacy summarize alias를 읽습니다.
+독립적인 context/indexing stage나 task 단위 실행 상태 머신은 아직 없습니다.
+
+## OmniRoute 경계
+
+clients/omniroute.rs의 AiProvider 계약과 재사용 reqwest Client를 사용합니다.
+기본 주소는 http://127.0.0.1:20128/v1 입니다. OpenRouter로 자동 fallback하지 않습니다.
+역할 모델은 OMNIROUTE_MODEL_* 또는 프로젝트 summarize/architect override로 지정합니다.
+모델 ID는 인스턴스의 GET /v1/models에서 확인해야 하며 코드에는 추측한 기본 ID가 없습니다.
+
+지원: system/user message, JSON response_format, temperature, max_tokens, token/cache/cost parsing.
+응답 본문은 1MiB로 제한하며 빈 응답·잘린 응답·잘못된 JSON을 거부합니다.
+429/5xx만 최대3회 재시도합니다. Retry-After 초/HTTP-date를 존중하고30초 초과 대기 요구는 명시적 오류로 반환합니다.
+POST의 모호한 네트워크 실패나 timeout은 중복 과금 방지를 위해 자동 재전송하지 않습니다.
+HTTP 요청 timeout은120초이며, retry 전체 시간이120초로 제한되는 것은 아닙니다.
+모델 목록은5초 timeout입니다. API key나 upstream error body는 로그/오류에 포함하지 않습니다.
+
+GET /v1/models 응답은 models(Cursor)와 omniroute_models를 분리합니다.
+현재 gateway 목록 조회 실패는 빈 목록으로 반환하므로 readiness 보장이 아닙니다.
+Cursor 모델을 지정하지 않으면 공식 API의 계정/팀/시스템 기본 모델 선택을 사용합니다.
+
+## PDF와 정보 보존
+
+pdf-inspector1.23.0의 full-page detection과 compact Markdown을 사용합니다.
+제목, 표, 숫자와 페이지 참조를 보존하도록 설정합니다. 원본 PDF도 artifact에 남깁니다.
+불필요한 dot leader와 반복 header/footer 정리는 parser가 수행하며, 추가로 연속 동일 일반 문단을 제거합니다.
+표/목록/링크/코드 구문은 일반 문단 중복 제거 대상이 아닙니다.
+native encoding 문제 또는 빈 native Markdown에만 pdftotext를 사용합니다.
+fallback은 별도 임시 디렉터리와20초 timeout을 사용하며 stdout pipe 교착을 피합니다.
+PDF 처리는 spawn_blocking으로 async worker를 막지 않도록 합니다.
+
+OCR 엔진은 포함하지 않습니다. 스캔/혼합 PDF의 미복구 페이지가 있으면 오류로 중단합니다.
+OCR 없는 부분 텍스트를 완전한 요구사항으로 가장하지 않습니다.
+ingest_meta에는 종류·confidence·페이지 수·OCR 대상·추출 방식·SHA256·토큰 추정치가 기록됩니다.
+
+## 토큰 절약이 실제 적용되는 위치
+
+1. 원문 PDF는 ingest만 읽고 extract에는 Markdown만 전송합니다.
+2. extract는 전체 필드와 타입을 확인하며 스키마 오류 시 총2회까지 호출합니다.
+3. 캐시 키는 원문·모델·프롬프트 버전·출력 상한을 포함합니다. 같은 프로젝트의 성공한 추출 artifact만 재사용합니다.
+4. 계획 요청에는 compact JSON과 필요한 답변만 넣고 전체 대화 기록은 누적하지 않습니다.
+5. planner는 정상 계획에서 상위 모델을 호출하지 않습니다. 모순/extreme/confidence<0.7/검증 실패 시만 최대1회 escalation합니다.
+6. Stitch 입력은 ui_requirements만 포함합니다.
+7. 구현 프롬프트에서는 PDF/raw_text/내부 cache URI를 제외합니다. 단, Cursor 내부의 repository context와 inference는 AutoForge가 제어하지 못합니다.
+8. 진단에는 실제 검증 로그와 직전 debug report만 압축해 넣습니다. 진단 evidence JSON은8KiB 상한입니다.
+9. 산출물 목록은 key별 최신 참조로 병합하여 재시작 때 같은 URI가 계속 늘어나지 않습니다.
+
+AI_MAX_INPUT_TOKENS 기본30000은 byte 기반 보수적 추정값이며 실제 모델 tokenizer 수치가 아닙니다.
+초과 입력은 명시적으로 차단하며 자동 요약/절단하지 않습니다.
+출력 상한: extract16000 / plan16000 / clarify2000 / diagnosis4000.
+실제 사용량은 provider response의 usage로 stage metadata에 기록합니다. provider가 cost를 생략하면 null입니다.
+영구 project/task 통합 원장과 비용 예약은 아직 연결되지 않았으므로 AI_*_BUDGET_USD만으로 비용 상한을 보장할 수 없습니다.
+
+## 아직 기반 도구인 기능
+
+ContextManager는 파일/바이트/개수 제한의 local index, symbol 기반 파일 선택, omission reason, 오류 압축을 제공합니다.
+오류 압축은 debug worker에 연결되어 있습니다.
+code index와 파일 선택은 Cursor 구현 worker에 연결되어 있지 않으며 session state는 아직 타입 수준입니다.
+CostManager 역시 분산 예산 예약/정산 경계가 아닙니다.
+OMNIROUTE_MODEL_CODE와 DEBUG_ALT는 현재 전체 coding 실행을 전환하는 스위치가 아닙니다.
+
+## 검증 및 운영
+
+backend의 cargo fmt/check/test/clippy와 frontend의 npm build/lint를 사용합니다.
+CI와 Containerfile은 pdftotext fallback을 위해 poppler-utils를 설치합니다.
+Rust 최소 버전은 잠금 의존성에 맞춘1.89입니다.
+Compose에서 호스트 gateway는 host.containers.internal:20128/v1을 사용합니다.
+LSP 미설치/timeout과 컴파일 결과는 별개입니다. 검증 결과는 [품질 문서](QUALITY_WORKFLOW.md)를 참고하세요.

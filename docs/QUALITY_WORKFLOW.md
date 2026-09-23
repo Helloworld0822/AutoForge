@@ -1,89 +1,57 @@
-# 품질 게이트 워크플로우
+# 품질 워크플로우와 검증 한계
 
-구현 완료 후 **자동 검증 → 디버깅 → 보안 패치**를 수행하는 품질 게이트입니다.
+## 현재 실행
 
-## 파이프라인
+implement → verify → (실패 시 debug → verify) → security_patch → deliver.
+구현·검증·패치는 현재 Cursor Cloud Agent이며, 로컬 sandbox executor가 아닙니다.
+실제 build/test exit code를 AutoForge 자체 프로세스가 수집하는 V2 verifier는 아직 미구현입니다.
+VerifyReport의 passed는 원격 agent가 작성한 보고서입니다.
 
-```mermaid
-flowchart TD
-    IMP[Implement] --> VER[Verify]
-    VER -->|passed| SEC[SecurityPatch]
-    VER -->|failed| DBG[Debug]
-    DBG --> VER
-    VER -->|max retries exceeded| FAIL[Pipeline Failed]
-    SEC --> DEL[Deliver]
-```
+debug attempt는0부터 시작합니다. 기본 설정에서0/1은 Cursor self-fix,
+2는 OmniRoute debug 진단 + Cursor patch,3은 debug_escalation 진단 + Cursor patch입니다.
+각 debug 뒤 scheduler가 verify를 다시 실행합니다.
+상한은 self2, mid1, final1이며 MAX_DEBUG_CYCLES 기본4로 전체 반복도 제한합니다.
+설정을0으로 두면 해당 진단 경로가 차단됩니다.
+아직 self-fix가 OmniRoute DeepSeek 호출인 것은 아닙니다.
 
-## 스테이지 상세
+debug는 verify_report.json의 실제 errors와 실패 checks를 읽습니다.
+누락/잘못된 보고서는 실패시키며 error count만으로 진단하지 않습니다.
+중복 로그와 긴 메시지를 압축하고 직전 debug 요약만 포함합니다.
+진단 JSON에는 root_cause, affected_files, recommended_fix, risk, additional_tests가 필요합니다.
 
-### Verify (자동 검증)
+SecurityPatch 이후 GitHub 자동 merge는 services/github.rs에서 passed를 확인합니다.
+다만 scheduler의 security 완료 처리와 verify의 PR ref 고정에는 남은 결함이 있으므로
+운영 자동 merge를 켜기 전에 [구조 평가 P0 항목](STRUCTURE_REVIEW.md)을 해결해야 합니다.
 
-| 항목 | 내용 |
-|------|------|
-| 모델 | DeepSeek implementation route; Sonnet/Kimi and Opus only for bounded diagnosis |
-| 실행 | OpenRouter가 model role을 선택하고 기존 Cursor workspace executor가 repo에서 patch/PR 작업을 수행 |
-| 검증 명령 | `cargo check`, `cargo test`, `cargo clippy`, `cargo fmt --check` |
-| 산출물 | `verify_report.json` |
-
-```json
-{
-  "passed": true,
-  "checks": [{ "name": "cargo test", "passed": true, "output": "..." }],
-  "errors": [],
-  "summary": "all checks passed"
-}
-```
-
-### Debug (자동 디버깅)
-
-| 항목 | 내용 |
-|------|------|
-| 모델 | DeepSeek V4.1 implementation route; Sonnet/Kimi and Opus bounded diagnosis |
-| 트리거 | Verify `passed: false` |
-| 동작 | 실패 테스트/린트 오류 분석 → 최소 수정 → 재검증 |
-| 재시도 | `MAX_DEBUG_CYCLES` (기본 3) |
-| 산출물 | `debug_report.json` |
-
-### SecurityPatch (보안 패치)
-
-| 항목 | 내용 |
-|------|------|
-| 모델 | DeepSeek patch route with configured security checks |
-| 트리거 | Verify 통과 후 |
-| 검사 | `cargo audit`, OWASP Top 10, 시크릿 스캔 |
-| 동작 | 취약 의존성 업데이트, 코드 취약점 수정 |
-| 산출물 | `security_report.json` |
-
-```json
-{
-  "passed": true,
-  "vulnerabilities_found": 2,
-  "patches_applied": [
-    { "id": "RUSTSEC-2024-0001", "severity": "high", "package": "openssl", "action": "upgraded to 0.10.70" }
-  ],
-  "audit_tools": ["cargo audit"],
-  "summary": "2 vulnerabilities patched"
-}
-```
-
-### Deliver
-
-모든 산출물 URI와 스테이지 메타데이터를 `delivery_manifest.json`으로 패키징합니다.
-
-## 설정
+## 검증 명령
 
 ```bash
-MAX_DEBUG_CYCLES=3   # Verify 실패 시 Debug 최대 횟수
-AI_DEEPSEEK_DEBUG_RETRIES=2
-AI_MID_DEBUG_RETRIES=1
-AI_OPUS_MAX_CALLS=1
+cd backend
+cargo fmt --all -- --check
+cargo check --locked
+cargo test --locked
+cargo clippy --all-targets --all-features -- -D warnings
+
+cd ../frontend
+npm ci
+npm run lint
+npm run build
+
+cd ..
+docker compose config --quiet
 ```
 
-## 실패 처리
+디스크가 작으면 CARGO_INCREMENTAL=0을 사용하세요. 빌드 캐시를 source commit에 포함하지 않습니다.
+pdftotext 회귀 테스트에는 poppler-utils가 필요합니다.
 
-| 상황 | 동작 |
-|------|------|
-| Verify 실패 + Debug 여유 있음 | Debug → Verify 재실행 |
-| Verify 실패 + Debug 횟수 초과 | 파이프라인 `Failed`, 프로젝트 상태 `failed` |
-| SecurityPatch 실패 | 파이프라인 `Failed` |
-| 스테이지 실행 오류 | 즉시 `Failed` |
+## 이번 검증 범위
+
+- Mock HTTP: chat/models wire contract, auth, usage, invalid/blank/truncated JSON,429/5xx/retry-after, timeout, response size, 오류 secret 비노출.
+- Native PDF fixture: compact Markdown, 숫자/표/목록 보존, OCR 필요 페이지 거부, pdftotext fallback.
+- Context: relevant ranking, symlink/traversal 거부, 파일/byte 상한, omission reason, UTF-8 error compression.
+- Pipeline: schema validation retry, gateway 종료 후 extraction cache 재사용, artifact 중복 방지, UI skip, planner DAG 검증.
+- 실제 로컬 API: multipart PDF 업로드→Markdown→mock gateway 추출→설계 질문 대기, 잘못된 PDF400.
+- Chromium:1440px/390px, provider 목록 분리, stale ID 표시/제출, empty/error catalog, 모바일 메뉴.
+
+유료 OmniRoute 인스턴스, Cursor 원격 빌드/PR, Stitch 생성, 실제 GitHub merge는 이 환경에서 검증하지 않았습니다.
+Mock 사용량은 과금 실측이 아닙니다. 전체 V2 완료 또는 운영 준비 완료로 해석하지 마세요.

@@ -1,5 +1,7 @@
 # AutoForge 구현 기획서
 
+> 초기 기획 기록입니다. 아래 단계는 완료 현황이 아닙니다. PostgreSQL/MinIO/S3 등의 과거 제안도 보존되어 있습니다. 현재 구현은 [ARCHITECTURE.md](ARCHITECTURE.md), 남은 V2 계획은 [STRUCTURE_REVIEW.md](STRUCTURE_REVIEW.md)를 기준으로 확인하세요.
+
 ## Phase 0 — 기반 (1주차 상당)
 
 ### 목표
@@ -20,15 +22,15 @@ Rust 워크스페이스 빌드 가능, Cursor API 연동 PoC.
 ## Phase 1 — 단일 파이프라인 (2주차 상당)
 
 ### 목표
-PDF 업로드 → 요약 → 기획까지 end-to-end (디자인/구현 제외).
+PDF 업로드 → 구조화 추출 → 기획까지 end-to-end (디자인/구현 제외).
 
 ### 태스크
 
 | ID | 태스크 | 완료 기준 |
 |----|--------|-----------|
-| P1-1 | `orchestrator` — 상태 머신 (ingest→summarize→architect) | PostgreSQL 상태 전이 정상 |
-| P1-2 | `worker` — SummarizeExecutor (Sonnet) | `summary.json` 생성 |
-| P1-3 | `worker` — ArchitectExecutor (Fable, plan mode) | `architecture.md`, `spec.md` 생성 |
+| P1-1 | `orchestrator` — 상태 머신 (ingest→extract→architect) | 상태 전이 정상 |
+| P1-2 | `worker` — Extract stage (OmniRoute extract role) | `project_spec.json` 생성 |
+| P1-3 | `worker` — ArchitectExecutor (OmniRoute plan role) | `architecture.md`, `spec.md` 생성 |
 | P1-4 | `api` — POST `/v1/projects` (multipart PDF) | curl 업로드 → 상태 조회 |
 | P1-5 | `artifacts` — S3 업로드/다운로드 | 스테이지 간 URI 전달 |
 
@@ -37,7 +39,7 @@ PDF 업로드 → 요약 → 기획까지 end-to-end (디자인/구현 제외).
 ## Phase 2 — 디자인 + 구현 (3주차 상당)
 
 ### 목표
-Stitch 디자인 + Codex 구현 + PR 자동 생성.
+Stitch 디자인 + Cursor workspace executor 구현 + PR 자동 생성.
 
 ### 태스크
 
@@ -46,7 +48,7 @@ Stitch 디자인 + Codex 구현 + PR 자동 생성.
 | P2-1 | `stitch-client` — Project 생성 + generate | 스크린 HTML/이미지 수신 |
 | P2-2 | `worker` — DesignExecutor | `screens/` S3 저장 |
 | P2-3 | architect ∥ design 병렬 스케줄링 | wall-clock 단축 확인 |
-| P2-4 | `worker` — ImplementExecutor (Codex) | GitHub PR URL 반환 |
+| P2-4 | `worker` — ImplementExecutor (Cursor workspace executor) | GitHub PR URL 반환 |
 | P2-5 | Cursor agent에 Stitch MCP 인라인 등록 | 디자인 참조 구현 |
 
 ---

@@ -1,6 +1,20 @@
 # AutoForge — AI 외주 자동화 프로그램
 
-PDF 계획서를 업로드하면 **INGEST → EXTRACT(Luna) → PLAN(Sonnet) → DESIGN(Stitch, UI 필요 시) → CONTEXT → IMPLEMENT(DeepSeek) → VERIFY/DEBUG → DELIVER** 파이프라인이 자동 실행됩니다. OpenRouter를 기본 inference gateway로 사용하며 OmniRouter/OmniRoute-compatible base URL도 지원합니다.
+PDF 계획서를 로컬 Markdown으로 변환하고, **OmniRoute로 요구사항 추출·계획·상위 디버그 진단**을 실행합니다. 구현·검증·수정·보안 패치는 현재 **Cursor Cloud Agent**가 담당하는 하이브리드 구조입니다. RabbitMQ worker와 기존 GitHub delivery 흐름을 유지합니다.
+
+> 전체 V2 마이그레이션이 완료된 것은 아닙니다. 로컬 patch executor, task별 context 연결, 강제 비용 예산은 아직 미완성입니다. [구조 평가와 후속 계획](docs/STRUCTURE_REVIEW.md)을 확인하세요.
+
+## OmniRoute 연결과 토큰 절감
+
+- `OMNIROUTE_BASE_URL` 기본값: `http://127.0.0.1:20128/v1`. `/chat/completions`, `/models`를 이 주소에 붙입니다.
+- `OMNIROUTE_API_KEY`와 역할별 `OMNIROUTE_MODEL_*`를 설정하세요. 실제 인스턴스의 `/v1/models`에서 확인한 ID만 사용합니다. 추측한 모델 기본값은 없습니다.
+- 이전 `OPENROUTER_*`/`OMNIROUTER_*` 변수는 더 이상 읽지 않습니다. 운영 설정을 `OMNIROUTE_*`로 옮겨야 합니다.
+- `pdf-inspector` compact Markdown, 페이지 참조, native `pdftotext` fallback을 사용합니다. 스캔/혼합 PDF는 OCR이 구성되지 않았다는 오류로 중단하며 부분 추출을 성공 처리하지 않습니다.
+- 요구사항 JSON은 축약 요약이 아닌 구조화 추출입니다. 스키마 오류만 최대 2회 호출하고, 같은 프로젝트에서 문서·모델·출력 설정이 같으면 저장된 추출 결과를 재사용합니다.
+- 계획 입력은 compact JSON, 디자인 입력은 UI 요구사항만, 구현 입력은 허용된 산출물 URI만 전송합니다. 디버그에는 실제 검증 로그의 중복 제거·크기 제한 결과를 넣습니다.
+- `AI_MAX_INPUT_TOKENS`는 토크나이저 독립 추정치의 상한입니다. 초과 시 원문을 잘라 보내지 않고 실패합니다. 출력 상한은 추출/계획 16K, 질문 2K, 진단 4K이며 설정 가능합니다.
+
+절감률은 문서·언어·모델에 따라 다릅니다. 추정 토큰과 실제 provider usage를 혼동하지 않으며, 실과금 절감률은 아직 측정하지 않았습니다.
 
 ## 프로젝트 구조
 
@@ -40,7 +54,10 @@ nginx/Containerfile
 
 ```bash
 cp .env.example .env
-# .env 편집 (OPENROUTER_API_KEY 또는 OmniRouter gateway, GITHUB_TOKEN 등)
+# .env 편집 (OMNIROUTE_API_KEY 및 OmniRoute gateway, GITHUB_TOKEN 등)
+# OMNIROUTE_MODEL_EXTRACT / PLAN 등을 실제 모델 목록에서 선택
+# 호스트에서 OmniRoute를 실행하고 Compose를 사용할 경우:
+# OMNIROUTE_BASE_URL=http://host.containers.internal:20128/v1
 
 # Docker
 ./scripts/compose-up.sh
@@ -63,6 +80,7 @@ open http://localhost:8080
 
 ```bash
 # 터미널 1 — 백엔드 API
+# Rust >= 1.89, pdftotext fallback에는 poppler-utils 필요
 cd backend && cargo run
 
 # 터미널 2 — 프론트엔드 (API :8080 프록시)
@@ -72,7 +90,7 @@ cd frontend && npm install && npm run dev
 
 ## GitHub 자동화
 
-`GITHUB_TOKEN` 설정 시 프라이빗 레포 자동 생성 → 기존 Cursor workspace executor의 PR 생성 → SecurityPatch 통과 후 자동 merge. AI 추출·계획·진단은 OpenRouter로 라우팅됩니다.
+`GITHUB_TOKEN` 설정 시 프라이빗 레포 자동 생성 → 기존 Cursor workspace executor의 PR 생성 → SecurityPatch 통과 후 자동 merge. AI 추출·계획·진단은 OmniRoute로 라우팅됩니다.
 
 ```bash
 export GITHUB_TOKEN=ghp_xxxx
@@ -135,15 +153,15 @@ curl -X POST http://localhost/v1/images \
 전체 목록은 [.env.example](.env.example) 참고. 주요 카테고리:
 
 - **서버**: `HOST`, `PORT`, `RUST_LOG`
-- **AI API 키**: `OPENROUTER_API_KEY`/`OPENROUTER_BASE_URL` (또는 `OMNIROUTER_*`/`OMNIROUTE_*`), legacy `CURSOR_API_KEY`, `STITCH_API_KEY`, Stitch Bearer (`STITCH_ACCESS_TOKEN` 또는 ADC/gcloud 자동 갱신 — [상세](docs/STITCH_ACCESS_TOKEN.md))
-- **모델/예산**: `OPENROUTER_MODEL_*`, `AI_PROJECT_BUDGET_USD`, `AI_TASK_BUDGET_USD`, bounded debug/Astra/Opus retry 설정
+- **AI API 키**: `OMNIROUTE_API_KEY`/`OMNIROUTE_BASE_URL` (기본 `http://127.0.0.1:20128/v1`), legacy `CURSOR_API_KEY`, `STITCH_API_KEY`, Stitch Bearer (`STITCH_ACCESS_TOKEN` 또는 ADC/gcloud 자동 갱신 — [상세](docs/STITCH_ACCESS_TOKEN.md))
+- **모델/예산**: `OMNIROUTE_MODEL_*`, `AI_PROJECT_BUDGET_USD`, `AI_TASK_BUDGET_USD`, bounded plan/debug escalation 설정
 - **GitHub 자동화**: `GITHUB_TOKEN`, `GITHUB_ORG`, `GITHUB_AUTO_MERGE`
 - **보안**: `API_KEY`, `CORS_ALLOWED_ORIGINS`, `MAX_UPLOAD_BYTES` — 운영 배포 전 반드시 확인
 - **아티팩트/이미지 저장소 (로컬 디스크)**: `ARTIFACTS_DIR`, `MAX_IMAGE_BYTES`
 - **RabbitMQ (분산 모드)**: `MESSAGE_QUEUE_ENABLED`, `RABBITMQ_URL` 등 — 기본값은 단일 프로세스(false). Redis는 프로젝트 스토어/알림용
 - **Slack 알림**: `SLACK_WEBHOOK_URL` 또는 `SLACK_BOT_TOKEN`+`SLACK_CHANNEL`
 
-서버 기동 시 누락되거나 위험한 설정(예: `API_KEY` 미설정, OpenRouter와 Cursor 키가 모두 비어있음)은
+서버 기동 시 누락되거나 위험한 설정(예: `API_KEY` 또는 `OMNIROUTE_API_KEY` 미설정)은
 로그에 경고로 출력됩니다.
 
 ## 운영 환경 체크리스트
