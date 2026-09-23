@@ -114,7 +114,7 @@ pub async fn apply_stage_output_async(
     app: &App,
     project: &mut Project,
     stage: StageId,
-    output: StageOutput,
+    mut output: StageOutput,
 ) -> Result<PipelineOutcome> {
     if let Some(git) = &app.project_git {
         if let Err(e) = git
@@ -130,6 +130,8 @@ pub async fn apply_stage_output_async(
         }
     }
 
+    enrich_head_revision(app, project, stage, &mut output).await;
+
     let outcome = apply_stage_output(project, stage, output)?;
 
     if stage == StageId::SecurityPatch && project.scheduler.quality.security_done {
@@ -137,6 +139,75 @@ pub async fn apply_stage_output_async(
     }
 
     Ok(outcome)
+}
+
+/// GitHub 구성 시 스테이지 결과에 실제 head revision을 기록해 검증·병합 대상을 일치시킨다.
+async fn enrich_head_revision(
+    app: &App,
+    project: &Project,
+    stage: StageId,
+    output: &mut StageOutput,
+) {
+    let passed = output
+        .metadata
+        .get("passed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let needs_head = matches!(stage, StageId::Implement)
+        || (matches!(stage, StageId::Verify) && passed)
+        || (matches!(stage, StageId::SecurityPatch) && passed);
+    if !needs_head {
+        return;
+    }
+
+    let pr_url = if stage == StageId::Implement {
+        output
+            .metadata
+            .get("pr_url")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    } else {
+        project
+            .stage_outputs
+            .get(&StageId::Implement)
+            .and_then(|m| m.get("pr_url"))
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    };
+
+    let live_head = match (app.github.as_deref(), pr_url.as_deref()) {
+        (Some(github), Some(url)) if github.is_configured() => {
+            github.get_pr_head(url).await.ok().map(|head| head.sha)
+        }
+        _ => None,
+    };
+
+    match stage {
+        StageId::Implement => {
+            if let Some(sha) = live_head {
+                output.metadata["head_sha"] = serde_json::json!(sha);
+            }
+        }
+        StageId::Verify => {
+            let head = live_head.or_else(|| {
+                project
+                    .stage_outputs
+                    .get(&StageId::Implement)
+                    .and_then(|m| m.get("head_sha"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            });
+            if let Some(sha) = head {
+                output.metadata["verified_head_sha"] = serde_json::json!(sha);
+            }
+        }
+        StageId::SecurityPatch => {
+            if let Some(sha) = live_head {
+                output.metadata["security_head_sha"] = serde_json::json!(sha);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// 스테이지 결과를 프로젝트에 반영
@@ -210,6 +281,12 @@ pub fn apply_stage_output(
                 .unwrap_or(false);
             project.scheduler.record_verify_result(passed);
             if passed {
+                let head = output
+                    .metadata
+                    .get("verified_head_sha")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                project.scheduler.quality.pin_verified_head(head);
                 project.stages.insert(stage, StageState::Completed);
             } else if project.scheduler.quality.verify_exhausted() {
                 project.stages.insert(stage, StageState::Failed);
@@ -241,7 +318,17 @@ pub fn apply_stage_output(
                 return Ok(PipelineOutcome::Failed("security patch gate failed".into()));
             }
             project.scheduler.record_security_done();
+            let security_head = output
+                .metadata
+                .get("security_head_sha")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            project.scheduler.quality.pin_security_head(security_head);
             project.stages.insert(stage, StageState::Completed);
+            if !project.scheduler.quality.heads_consistent() {
+                project.scheduler.invalidate_verify_for_head_change();
+                project.stages.insert(StageId::Verify, StageState::Queued);
+            }
         }
         _ => {
             project.stages.insert(stage, StageState::Completed);
@@ -755,6 +842,11 @@ mod tests {
             stage: StageId::Ingest,
             output_artifacts: vec![],
         });
+        scheduler.mark_completed(&StageCompleted {
+            project_id: id.clone(),
+            stage: StageId::Implement,
+            output_artifacts: vec![],
+        });
         scheduler.record_verify_result(true);
         Project {
             id,
@@ -838,6 +930,65 @@ mod tests {
             Some(&StageState::Completed)
         );
         assert!(project.scheduler.quality.security_done);
+        let ready: Vec<_> = project
+            .scheduler
+            .ready_stages()
+            .into_iter()
+            .map(|cmd| cmd.stage)
+            .collect();
+        assert!(ready.contains(&StageId::Deliver));
+    }
+
+    #[test]
+    fn security_head_change_requires_reverify_before_delivery() {
+        let mut project = project_with_verify_passed();
+        apply_stage_output(
+            &mut project,
+            StageId::Verify,
+            StageOutput {
+                artifacts: vec![],
+                metadata: serde_json::json!({ "passed": true, "verified_head_sha": "sha-a" }),
+            },
+        )
+        .expect("verify");
+        assert_eq!(
+            project.scheduler.quality.verified_head_sha.as_deref(),
+            Some("sha-a")
+        );
+
+        let outcome = apply_stage_output(
+            &mut project,
+            StageId::SecurityPatch,
+            StageOutput {
+                artifacts: vec![],
+                metadata: serde_json::json!({ "passed": true, "security_head_sha": "sha-b" }),
+            },
+        )
+        .expect("security");
+        assert!(matches!(outcome, PipelineOutcome::Continue));
+        assert!(!project.scheduler.quality.verify_passed);
+        assert_eq!(
+            project.stages.get(&StageId::Verify),
+            Some(&StageState::Queued)
+        );
+        let ready: Vec<_> = project
+            .scheduler
+            .ready_stages()
+            .into_iter()
+            .map(|cmd| cmd.stage)
+            .collect();
+        assert!(ready.contains(&StageId::Verify));
+        assert!(!ready.contains(&StageId::Deliver));
+
+        apply_stage_output(
+            &mut project,
+            StageId::Verify,
+            StageOutput {
+                artifacts: vec![],
+                metadata: serde_json::json!({ "passed": true, "verified_head_sha": "sha-b" }),
+            },
+        )
+        .expect("re-verify");
         let ready: Vec<_> = project
             .scheduler
             .ready_stages()

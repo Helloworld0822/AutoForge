@@ -17,6 +17,10 @@ pub struct QualityGate {
     pub awaiting_debug: bool,
     pub security_done: bool,
     pub max_debug_cycles: u8,
+    #[serde(default)]
+    pub verified_head_sha: Option<String>,
+    #[serde(default)]
+    pub security_head_sha: Option<String>,
 }
 
 impl QualityGate {
@@ -29,6 +33,7 @@ impl QualityGate {
 
     pub fn record_verify_failed(&mut self) {
         self.verify_passed = false;
+        self.verified_head_sha = None;
         self.awaiting_debug = self.debug_cycles < self.max_debug_cycles;
     }
 
@@ -44,6 +49,31 @@ impl QualityGate {
 
     pub fn verify_exhausted(&self) -> bool {
         !self.verify_passed && self.debug_cycles >= self.max_debug_cycles && !self.awaiting_debug
+    }
+
+    /// Verify가 통과한 revision을 고정한다. 이후 head 이동은 이 값과 비교한다.
+    pub fn pin_verified_head(&mut self, head: Option<String>) {
+        self.verified_head_sha = head;
+    }
+
+    /// SecurityPatch가 실행된 revision을 기록한다.
+    pub fn pin_security_head(&mut self, head: Option<String>) {
+        self.security_head_sha = head;
+    }
+
+    /// 두 게이트가 같은 revision을 검증했는지 (revision 미상이면 강제하지 않음).
+    pub fn heads_consistent(&self) -> bool {
+        match (&self.verified_head_sha, &self.security_head_sha) {
+            (Some(verified), Some(security)) => verified == security,
+            _ => true,
+        }
+    }
+
+    /// SecurityPatch가 검증 이후 head를 이동시킨 경우 Verify 통과를 무효화한다.
+    pub fn invalidate_verify_for_head_change(&mut self) {
+        self.verify_passed = false;
+        self.awaiting_debug = false;
+        self.verified_head_sha = None;
     }
 }
 
@@ -153,6 +183,13 @@ impl DagScheduler {
         self.completed.insert(StageId::SecurityPatch);
     }
 
+    /// SecurityPatch가 검증 이후 head를 이동시킨 경우 Verify 통과를 무효화하고 재검증을 허용한다.
+    pub fn invalidate_verify_for_head_change(&mut self) {
+        self.quality.invalidate_verify_for_head_change();
+        self.completed.remove(&StageId::Verify);
+        self.running.remove(&StageId::Verify);
+    }
+
     pub fn record_architect_draft(&mut self) {
         self.running.remove(&StageId::Architect);
         self.architecture.record_draft();
@@ -251,6 +288,8 @@ impl DagScheduler {
         }
 
         if self.quality.security_done
+            && self.quality.verify_passed
+            && self.quality.heads_consistent()
             && !self.completed.contains(&StageId::Deliver)
             && !self.running.contains(&StageId::Deliver)
         {
@@ -289,6 +328,7 @@ impl DagScheduler {
                 self.quality.verify_passed = false;
                 self.quality.awaiting_debug = false;
                 self.quality.debug_cycles = 0;
+                self.quality.verified_head_sha = None;
                 self.completed.remove(&StageId::Verify);
             }
             StageId::Debug => {
@@ -297,6 +337,7 @@ impl DagScheduler {
             }
             StageId::SecurityPatch => {
                 self.quality.security_done = false;
+                self.quality.security_head_sha = None;
                 self.completed.remove(&StageId::SecurityPatch);
             }
             StageId::Architect => {
@@ -317,6 +358,8 @@ impl DagScheduler {
                 self.quality.awaiting_debug = false;
                 self.quality.debug_cycles = 0;
                 self.quality.security_done = false;
+                self.quality.verified_head_sha = None;
+                self.quality.security_head_sha = None;
                 self.completed.remove(&StageId::Verify);
                 self.completed.remove(&StageId::Debug);
                 self.completed.remove(&StageId::SecurityPatch);
@@ -537,5 +580,38 @@ mod tests {
         assert!(!sched.has_failed());
         let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
         assert!(ready.contains(&StageId::Verify));
+    }
+
+    #[test]
+    fn deliver_requires_matching_verified_and_security_revision() {
+        let mut sched = DagScheduler::new();
+        complete_through(&mut sched, StageId::Ingest);
+        complete_through(&mut sched, StageId::Implement);
+        sched.record_verify_result(true);
+        sched.quality.pin_verified_head(Some("sha-a".into()));
+        sched.record_security_done();
+        sched.quality.pin_security_head(Some("sha-a".into()));
+
+        let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
+        assert!(ready.contains(&StageId::Deliver));
+    }
+
+    #[test]
+    fn deliver_is_blocked_when_security_moved_the_verified_head() {
+        let mut sched = DagScheduler::new();
+        complete_through(&mut sched, StageId::Ingest);
+        complete_through(&mut sched, StageId::Implement);
+        sched.record_verify_result(true);
+        sched.quality.pin_verified_head(Some("sha-a".into()));
+        sched.record_security_done();
+        sched.quality.pin_security_head(Some("sha-b".into()));
+
+        let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
+        assert!(!ready.contains(&StageId::Deliver));
+
+        sched.invalidate_verify_for_head_change();
+        let ready: HashSet<_> = sched.ready_stages().into_iter().map(|c| c.stage).collect();
+        assert!(ready.contains(&StageId::Verify));
+        assert!(!ready.contains(&StageId::Deliver));
     }
 }

@@ -43,7 +43,7 @@ pub async fn ensure_project_repo(app: &App, project: &mut Project) -> Result<Opt
     Ok(Some(created))
 }
 
-/// SecurityPatch 통과 후 PR 자동 머지
+/// SecurityPatch 통과 후, 검증된 revision과 현재 PR head가 일치할 때만 PR을 머지한다.
 pub async fn try_auto_merge_pr(app: &App, project: &mut Project) -> Result<()> {
     let github = match &app.github {
         Some(g) if g.is_configured() && g.auto_merge_enabled() => g,
@@ -58,22 +58,56 @@ pub async fn try_auto_merge_pr(app: &App, project: &mut Project) -> Result<()> {
         .unwrap_or(false);
 
     if !security_passed {
+        record_merge_skip(project, "security patch gate did not pass");
         return Ok(());
     }
 
-    let repo_url = match &project.repo_url {
-        Some(url) => url.clone(),
-        None => return Ok(()),
-    };
-
-    let pr_url = project
+    let pr_url = match project
         .stage_outputs
         .get(&StageId::Implement)
         .and_then(|m| m.get("pr_url"))
         .and_then(|v| v.as_str())
-        .map(String::from);
+    {
+        Some(url) => url.to_string(),
+        None => {
+            record_merge_skip(project, "no implement pull request to merge");
+            return Ok(());
+        }
+    };
 
-    match github.auto_merge_pr(&repo_url, pr_url.as_deref()).await {
+    let verified_sha = match project.scheduler.quality.verified_head_sha.clone() {
+        Some(sha) => sha,
+        None => {
+            record_merge_skip(
+                project,
+                "no verified revision recorded for this pull request",
+            );
+            return Ok(());
+        }
+    };
+
+    if !project.scheduler.quality.heads_consistent() {
+        record_merge_skip(
+            project,
+            "security revision differs from the verified revision",
+        );
+        return Ok(());
+    }
+
+    let live_head = match github.get_pr_head(&pr_url).await {
+        Ok(head) => head,
+        Err(e) => {
+            record_merge_failure(project, &pr_url, format!("cannot read PR head: {e}"));
+            return Ok(());
+        }
+    };
+
+    if live_head.sha != verified_sha {
+        record_merge_skip(project, "pull request head moved since verification");
+        return Ok(());
+    }
+
+    match github.auto_merge_pr(&pr_url, Some(&verified_sha)).await {
         Ok(result) => {
             project.stage_outputs.insert(
                 StageId::Deliver,
@@ -81,6 +115,7 @@ pub async fn try_auto_merge_pr(app: &App, project: &mut Project) -> Result<()> {
                     "merge_status": if result.merged { "merged" } else { "skipped" },
                     "merge_message": result.message,
                     "merge_sha": result.sha,
+                    "verified_head_sha": verified_sha,
                     "pr_url": pr_url,
                 }),
             );
@@ -90,16 +125,30 @@ pub async fn try_auto_merge_pr(app: &App, project: &mut Project) -> Result<()> {
         }
         Err(e) => {
             warn!(project_id = %project.id.0, error = %e, "PR auto-merge failed");
-            project.stage_outputs.insert(
-                StageId::Deliver,
-                serde_json::json!({
-                    "merge_status": "failed",
-                    "merge_message": e.to_string(),
-                    "pr_url": pr_url,
-                }),
-            );
+            record_merge_failure(project, &pr_url, e.to_string());
         }
     }
 
     Ok(())
+}
+
+fn record_merge_skip(project: &mut Project, message: &str) {
+    project.stage_outputs.insert(
+        StageId::Deliver,
+        serde_json::json!({
+            "merge_status": "skipped",
+            "merge_message": message,
+        }),
+    );
+}
+
+fn record_merge_failure(project: &mut Project, pr_url: &str, message: String) {
+    project.stage_outputs.insert(
+        StageId::Deliver,
+        serde_json::json!({
+            "merge_status": "failed",
+            "merge_message": message,
+            "pr_url": pr_url,
+        }),
+    );
 }

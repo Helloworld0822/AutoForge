@@ -11,6 +11,7 @@ pub struct GitHubClient {
     token: String,
     org: Option<String>,
     auto_merge: bool,
+    base_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +62,32 @@ struct MergePrResponse {
     message: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PullRequestHead {
+    pub branch: String,
+    pub sha: String,
+    pub repo_full_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetPrResponse {
+    head: GetPrHead,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetPrHead {
+    #[serde(rename = "ref")]
+    branch: String,
+    sha: String,
+    #[serde(default)]
+    repo: Option<GetPrRepo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetPrRepo {
+    full_name: String,
+}
+
 impl GitHubClient {
     pub fn new(token: String, org: Option<String>, auto_merge: bool) -> Result<Self> {
         if token.is_empty() {
@@ -73,7 +100,13 @@ impl GitHubClient {
             token,
             org,
             auto_merge,
+            base_url: GITHUB_API.into(),
         })
+    }
+
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into().trim_end_matches('/').to_string();
+        self
     }
 
     pub fn is_configured(&self) -> bool {
@@ -87,11 +120,12 @@ impl GitHubClient {
     fn create_repo_url(&self) -> String {
         if self.org.as_ref().is_some_and(|org| !org.trim().is_empty()) {
             format!(
-                "{GITHUB_API}/orgs/{}/repos",
+                "{}/orgs/{}/repos",
+                self.base_url,
                 self.org.as_ref().unwrap().trim()
             )
         } else {
-            format!("{GITHUB_API}/user/repos")
+            format!("{}/user/repos", self.base_url)
         }
     }
 
@@ -177,7 +211,10 @@ impl GitHubClient {
 
     /// 열린 PR 목록 조회 (최신 1건)
     pub async fn find_open_pr(&self, owner: &str, repo: &str) -> Result<Option<PullRequestRef>> {
-        let url = format!("{GITHUB_API}/repos/{owner}/{repo}/pulls?state=open&sort=created&direction=desc&per_page=1");
+        let url = format!(
+            "{}/repos/{owner}/{repo}/pulls?state=open&sort=created&direction=desc&per_page=1",
+            self.base_url
+        );
 
         let resp = self
             .api_get(&url)
@@ -197,18 +234,26 @@ impl GitHubClient {
         }))
     }
 
-    /// PR 자동 머지 (squash)
+    /// PR 자동 머지 (squash). `expected_head_sha`가 주어지면 GitHub 조건부 머지로
+    /// 검증한 revision에서 head가 이동한 경우 머지를 거부한다.
     pub async fn merge_pull_request(
         &self,
         owner: &str,
         repo: &str,
         pull_number: u64,
+        expected_head_sha: Option<&str>,
     ) -> Result<MergeResult> {
-        let url = format!("{GITHUB_API}/repos/{owner}/{repo}/pulls/{pull_number}/merge");
-        let body = serde_json::json!({
+        let url = format!(
+            "{}/repos/{owner}/{repo}/pulls/{pull_number}/merge",
+            self.base_url
+        );
+        let mut body = serde_json::json!({
             "merge_method": "squash",
             "commit_title": format!("AutoForge: merge PR #{pull_number}"),
         });
+        if let Some(sha) = expected_head_sha {
+            body["sha"] = serde_json::Value::String(sha.to_string());
+        }
 
         let resp = self
             .http
@@ -256,8 +301,36 @@ impl GitHubClient {
         )))
     }
 
-    /// PR URL 또는 repo에서 PR을 찾아 자동 머지
-    pub async fn auto_merge_pr(&self, repo_url: &str, pr_url: Option<&str>) -> Result<MergeResult> {
+    /// PR의 head 브랜치/SHA/저장소를 조회한다 (revision 고정 검증용).
+    pub async fn get_pr_head(&self, pr_url: &str) -> Result<PullRequestHead> {
+        let (owner, repo, number) = Self::parse_pr_url(pr_url)
+            .ok_or_else(|| AutoForgeError::BadRequest(format!("invalid PR url: {pr_url}")))?;
+        let url = format!("{}/repos/{owner}/{repo}/pulls/{number}", self.base_url);
+        let resp = self
+            .api_get(&url)
+            .await
+            .map_err(|e| AutoForgeError::GitHub(e.to_string()))?;
+        let pr: GetPrResponse = resp
+            .json()
+            .await
+            .map_err(|e| AutoForgeError::GitHub(format!("github parse PR head: {e}")))?;
+        Ok(PullRequestHead {
+            repo_full_name: pr
+                .head
+                .repo
+                .map(|repo| repo.full_name)
+                .unwrap_or_else(|| format!("{owner}/{repo}")),
+            branch: pr.head.branch,
+            sha: pr.head.sha,
+        })
+    }
+
+    /// 지정한 PR만 조건부로 자동 머지한다. 저장소 전역 "열린 PR" 폴백은 사용하지 않는다.
+    pub async fn auto_merge_pr(
+        &self,
+        pr_url: &str,
+        expected_head_sha: Option<&str>,
+    ) -> Result<MergeResult> {
         if !self.auto_merge {
             return Ok(MergeResult {
                 merged: false,
@@ -266,24 +339,10 @@ impl GitHubClient {
             });
         }
 
-        if let Some(url) = pr_url {
-            if let Some((owner, repo, number)) = Self::parse_pr_url(url) {
-                return self.merge_pull_request(&owner, &repo, number).await;
-            }
-        }
-
-        let (owner, repo) = Self::parse_repo_url(repo_url)
-            .ok_or_else(|| AutoForgeError::BadRequest("invalid repo_url".into()))?;
-
-        if let Some(pr) = self.find_open_pr(&owner, &repo).await? {
-            return self.merge_pull_request(&owner, &repo, pr.number).await;
-        }
-
-        Ok(MergeResult {
-            merged: false,
-            sha: None,
-            message: "no open pull request found".into(),
-        })
+        let (owner, repo, number) = Self::parse_pr_url(pr_url)
+            .ok_or_else(|| AutoForgeError::BadRequest(format!("invalid PR url: {pr_url}")))?;
+        self.merge_pull_request(&owner, &repo, number, expected_head_sha)
+            .await
     }
 
     async fn api_get(&self, url: &str) -> Result<reqwest::Response> {
