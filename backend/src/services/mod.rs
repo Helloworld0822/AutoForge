@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod architecture_qa;
+pub mod artifact_access;
 pub mod artifacts;
 pub mod context_manager;
 pub mod cost_manager;

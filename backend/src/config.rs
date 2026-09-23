@@ -81,6 +81,10 @@ pub struct Config {
     pub git_auto_commit: bool,
     /// 일일 git push 시각 (UTC, 0–23)
     pub git_daily_push_hour_utc: u8,
+    /// 원격 coder용 아티팩트 토큰 서명 키 (미설정 시 session secret/개발 기본값)
+    pub artifact_signing_secret: Option<String>,
+    /// coder에게 노출 가능한 아티팩트 최대 크기 (bytes)
+    pub coder_artifact_max_bytes: usize,
 }
 
 impl Config {
@@ -185,7 +189,21 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(23),
+            artifact_signing_secret: env::var("ARTIFACT_SIGNING_SECRET")
+                .ok()
+                .filter(|v| !v.is_empty()),
+            coder_artifact_max_bytes: env::var("CODER_ARTIFACT_MAX_BYTES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(256 * 1024),
         }
+    }
+
+    pub fn artifact_signing_secret(&self) -> String {
+        self.artifact_signing_secret
+            .clone()
+            .or_else(|| self.session_secret.clone())
+            .unwrap_or_else(|| "autoforge-dev-artifact-signing-not-for-production".into())
     }
 
     pub fn github_enabled(&self) -> bool {

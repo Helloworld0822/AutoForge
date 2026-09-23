@@ -562,3 +562,66 @@ pub async fn serve_media(
         .insert_header((header::CACHE_CONTROL, "public, max-age=31536000, immutable"))
         .body(bytes))
 }
+
+#[derive(serde::Deserialize)]
+pub struct ArtifactTokenQuery {
+    token: String,
+}
+
+/// 서명 토큰으로 허용된 생성 아티팩트만 전달한다 (원문 PDF/내부 상태는 allowlist로 차단).
+pub async fn serve_coder_artifact(
+    query: web::Query<ArtifactTokenQuery>,
+    app: web::Data<Arc<App>>,
+) -> Result<HttpResponse> {
+    let claims = crate::services::artifact_access::verify_coder_token(
+        &app.config.artifact_signing_secret(),
+        &query.token,
+        chrono::Utc::now(),
+    )?;
+
+    let project_id = uuid::Uuid::parse_str(&claims.project_id)
+        .map_err(|_| AutoForgeError::BadRequest("invalid artifact token project".into()))?;
+    app.store
+        .get(project_id)
+        .await?
+        .ok_or_else(|| AutoForgeError::NotFound(format!("project {project_id}")))?;
+
+    let expected_prefix = format!("projects/{project_id}/");
+    if !claims.key.starts_with(&expected_prefix) {
+        return Err(AutoForgeError::BadRequest(
+            "artifact token key does not belong to the requested project".into(),
+        ));
+    }
+
+    let filename = claims.key.rsplit('/').next().unwrap_or_default();
+    if !crate::services::artifact_access::is_coder_artifact_allowed(filename) {
+        return Err(AutoForgeError::BadRequest(
+            "artifact is not allowed for coder delivery".into(),
+        ));
+    }
+
+    let bytes = app
+        .artifacts
+        .get(&claims.key)
+        .await
+        .map_err(|_| AutoForgeError::NotFound("artifact".into()))?;
+    if bytes.len() > app.config.coder_artifact_max_bytes {
+        return Err(AutoForgeError::BadRequest(
+            "artifact exceeds the coder delivery size limit".into(),
+        ));
+    }
+
+    Ok(HttpResponse::Ok()
+        .content_type(coder_content_type(filename))
+        .insert_header((header::CACHE_CONTROL, "no-store"))
+        .body(bytes))
+}
+
+fn coder_content_type(filename: &str) -> &'static str {
+    match filename.rsplit('.').next().unwrap_or_default() {
+        "json" => "application/json",
+        "html" => "text/html; charset=utf-8",
+        "png" => "image/png",
+        _ => "text/markdown; charset=utf-8",
+    }
+}

@@ -57,6 +57,9 @@ pub struct StageContext {
     pub architecture_finalize: bool,
     pub architecture_answers: Vec<(String, String)>,
     pub model_config: PipelineModelConfig,
+    pub artifact_signing_secret: String,
+    pub public_url: String,
+    pub coder_artifact_max_bytes: usize,
 }
 
 #[derive(Debug)]

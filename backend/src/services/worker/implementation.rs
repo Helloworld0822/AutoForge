@@ -1,9 +1,13 @@
 use super::{StageContext, StageExecutor, StageOutput};
 use crate::clients::cursor::CreateAgentOpts;
-use crate::domain::StageId;
+use crate::domain::{ArtifactRef, StageId};
 use crate::error::{AutoForgeError, Result};
+use crate::services::artifact_access::{
+    is_coder_artifact_allowed, issue_coder_url, looks_like_secret,
+};
 use crate::services::language::language_prompt_note;
 use async_trait::async_trait;
+use chrono::Utc;
 
 pub struct ImplementExecutor;
 
@@ -29,7 +33,7 @@ impl StageExecutor for ImplementExecutor {
 
         let response = ctx
             .cursor
-            .create_agent(&build_prompt(ctx), &profile, opts)
+            .create_agent(&build_prompt(ctx).await?, &profile, opts)
             .await?;
         let run = ctx
             .cursor
@@ -71,7 +75,7 @@ impl StageExecutor for ImplementExecutor {
     }
 }
 
-fn build_prompt(ctx: &StageContext) -> String {
+async fn build_prompt(ctx: &StageContext) -> Result<String> {
     let has_devops = ctx
         .input
         .iter()
@@ -88,16 +92,66 @@ fn build_prompt(ctx: &StageContext) -> String {
         ctx.resolved_language,
     );
 
-    format!(
+    let mut delivered: Vec<String> = Vec::new();
+    for artifact in ctx
+        .input
+        .iter()
+        .filter(|artifact| implementation_artifact(&artifact.name))
+    {
+        if let Some(line) = deliver_artifact(ctx, artifact).await? {
+            delivered.push(line);
+        }
+    }
+
+    Ok(format!(
         "tasks.json 순서대로 구현하세요. design/screens/ 의 UI 참고 자료를 사용하세요. \
          Stitch HTML 또는 Figma PNG/export JSON이 포함될 수 있습니다.\n\
-         {language_note}{devops_note}입력: {:?}",
-        ctx.input
-            .iter()
-            .filter(|artifact| implementation_artifact(&artifact.name))
-            .map(|artifact| &artifact.uri)
-            .collect::<Vec<_>>()
-    )
+         {language_note}{devops_note}입력:\n{}",
+        delivered.join("\n")
+    ))
+}
+
+async fn deliver_artifact(ctx: &StageContext, artifact: &ArtifactRef) -> Result<Option<String>> {
+    if !is_coder_artifact_allowed(&artifact.name) {
+        return Ok(None);
+    }
+    if let Ok(url) = issue_coder_url(
+        &ctx.artifact_signing_secret,
+        &ctx.public_url,
+        ctx.command.project_id.0,
+        artifact,
+        Utc::now(),
+    ) {
+        return Ok(Some(format!("- {}: {url}", artifact.name)));
+    }
+    inline_artifact(ctx, artifact).await
+}
+
+async fn inline_artifact(ctx: &StageContext, artifact: &ArtifactRef) -> Result<Option<String>> {
+    if artifact.content_type.starts_with("image/") || artifact.name.ends_with(".png") {
+        return Ok(None);
+    }
+    let bytes = match ctx.artifacts.get(&artifact.key).await {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(None),
+    };
+    if bytes.len() > ctx.coder_artifact_max_bytes {
+        return Ok(None);
+    }
+    let Ok(text) = String::from_utf8(bytes.to_vec()) else {
+        return Ok(None);
+    };
+    if looks_like_secret(&text) {
+        tracing::warn!(
+            artifact = %artifact.name,
+            "artifact appears to contain credentials; omitted from the coder prompt"
+        );
+        return Ok(Some(format!(
+            "- {}: omitted (potential secret material)",
+            artifact.name
+        )));
+    }
+    Ok(Some(format!("- {} (inline):\n{text}", artifact.name)))
 }
 
 fn implementation_artifact(name: &str) -> bool {

@@ -10,6 +10,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .route("/ready", web::get().to(handlers::ready))
         .route("/health/ready", web::get().to(handlers::ready))
         .route("/media/{filename}", web::get().to(handlers::serve_media))
+        .route(
+            "/artifacts/coder",
+            web::get().to(handlers::serve_coder_artifact),
+        )
         .service(
             web::scope("/v1")
                 .route("/auth/login", web::post().to(login))

@@ -104,6 +104,9 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
         architecture_finalize,
         architecture_answers,
         model_config: project.model_config.clone(),
+        artifact_signing_secret: app.config.artifact_signing_secret(),
+        public_url: app.config.public_url.clone(),
+        coder_artifact_max_bytes: app.config.coder_artifact_max_bytes,
     };
 
     executor.execute(&ctx).await

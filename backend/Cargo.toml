@@ -36,6 +36,7 @@ futures-util = "0.3"
 clap = { version = "4", features = ["derive", "env"] }
 pdf-inspector = "=1.23.0"
 sha2 = "0.10"
+hmac = "0.12"
 hex = "0.4"
 dashmap = "6"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
