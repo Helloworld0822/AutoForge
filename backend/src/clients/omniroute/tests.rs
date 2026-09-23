@@ -2,6 +2,8 @@ use super::*;
 use chrono::{DateTime, Utc};
 use std::time::Duration;
 
+#[path = "tests/parsing.rs"]
+mod parsing;
 #[path = "tests/wire.rs"]
 mod wire;
 
