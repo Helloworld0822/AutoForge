@@ -42,28 +42,44 @@ function connectWebSocket(
   let ws: WebSocket | null = null;
   let closed = false;
   let retryMs = 1000;
+  let retryTimer: number | undefined;
+
+  const detach = (socket: WebSocket) => {
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null;
+  };
 
   const connect = () => {
+    retryTimer = undefined;
     if (closed) return;
-    ws = new WebSocket(buildWebSocketUrl(path));
+    const socket = new WebSocket(buildWebSocketUrl(path));
+    ws = socket;
+    const isActive = () => !closed && ws === socket;
 
-    ws.onopen = () => {
+    socket.onopen = () => {
+      if (!isActive()) return;
       retryMs = 1000;
     };
 
-    ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (!isActive()) return;
       const msg = parseMessage(String(event.data));
       if (msg) onMessage(msg);
     };
 
-    ws.onerror = () => {
-      ws?.close();
+    socket.onerror = () => {
+      if (isActive()) socket.close();
     };
 
-    ws.onclose = () => {
+    socket.onclose = () => {
+      if (!isActive()) return;
+      detach(socket);
+      ws = null;
       onDisconnect?.();
       if (closed) return;
-      window.setTimeout(connect, retryMs);
+      retryTimer = window.setTimeout(connect, retryMs);
       retryMs = Math.min(retryMs * 2, 15000);
     };
   };
@@ -71,8 +87,17 @@ function connectWebSocket(
   connect();
 
   return () => {
+    if (closed) return;
     closed = true;
-    ws?.close();
+    if (retryTimer !== undefined) {
+      window.clearTimeout(retryTimer);
+      retryTimer = undefined;
+    }
+    if (ws) {
+      detach(ws);
+      ws.close();
+      ws = null;
+    }
   };
 }
 
