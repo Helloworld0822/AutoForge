@@ -59,7 +59,12 @@ impl App {
         queue: Option<Arc<MessageQueue>>,
         slack: Option<Arc<SlackNotifier>>,
     ) -> crate::Result<Self> {
-        let omniroute = Arc::new(crate::clients::omniroute::OmniRouteClient::new(config.omniroute_base_url.clone(), config.omniroute_api_key.clone(), config.github_token.clone(), &config.artifacts_dir)?);
+        let omniroute = Arc::new(crate::clients::omniroute::OmniRouteClient::new(
+            config.omniroute_base_url.clone(),
+            config.omniroute_api_key.clone(),
+            config.github_token.clone(),
+            &config.artifacts_dir,
+        )?);
         let stitch = Arc::new(crate::clients::stitch::StitchClient::new(
             config.stitch_api_key.clone(),
             config.stitch_access_token.clone(),

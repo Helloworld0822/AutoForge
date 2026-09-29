@@ -83,7 +83,8 @@ impl Config {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(8080),
             omniroute_api_key: env::var("OMNIROUTE_API_KEY").unwrap_or_default(),
-            omniroute_base_url: env::var("OMNIROUTE_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:20128/v1".into()),
+            omniroute_base_url: env::var("OMNIROUTE_BASE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:20128/v1".into()),
             stitch_api_key: env::var("STITCH_API_KEY").unwrap_or_default(),
             stitch_access_token: env::var("STITCH_ACCESS_TOKEN").unwrap_or_default(),
             figma_access_token: env::var("FIGMA_ACCESS_TOKEN").unwrap_or_default(),
