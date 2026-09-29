@@ -20,7 +20,8 @@ fn optional_non_empty(value: Option<String>) -> Option<String> {
 pub struct Config {
     pub host: String,
     pub port: u16,
-    pub cursor_api_key: String,
+    pub omniroute_api_key: String,
+    pub omniroute_base_url: String,
     pub stitch_api_key: String,
     /// Stitch AI 생성(generate_screen 등)용 OAuth Bearer 토큰. API 키만으로는 생성 불가.
     pub stitch_access_token: String,
@@ -81,7 +82,9 @@ impl Config {
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(8080),
-            cursor_api_key: env::var("CURSOR_API_KEY").unwrap_or_default(),
+            omniroute_api_key: env::var("OMNIROUTE_API_KEY").unwrap_or_default(),
+            omniroute_base_url: env::var("OMNIROUTE_BASE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:20128/v1".into()),
             stitch_api_key: env::var("STITCH_API_KEY").unwrap_or_default(),
             stitch_access_token: env::var("STITCH_ACCESS_TOKEN").unwrap_or_default(),
             figma_access_token: env::var("FIGMA_ACCESS_TOKEN").unwrap_or_default(),
@@ -186,8 +189,8 @@ impl Config {
     /// 필수/권장 설정 누락을 점검하고 경고를 남긴다. 서버는 계속 기동하되
     /// 운영자가 로그에서 즉시 문제를 인지할 수 있도록 한다.
     pub fn validate_and_warn(&self) {
-        if self.cursor_api_key.is_empty() {
-            tracing::warn!("CURSOR_API_KEY is not set — Summarize/Architect/Implement/Verify/Debug stages will fail");
+        if self.omniroute_api_key.is_empty() {
+            tracing::warn!("OMNIROUTE_API_KEY is not set — Summarize/Architect/Implement/Verify/Debug stages will fail");
         }
         if self.stitch_api_key.is_empty() && !stitch_bearer_available(&self.stitch_access_token) {
             tracing::warn!(

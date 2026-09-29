@@ -293,13 +293,13 @@ pub async fn submit_architecture_answers(
 }
 
 pub async fn list_models(app: web::Data<Arc<App>>) -> Result<HttpResponse> {
-    use crate::clients::cursor::CursorClient;
+    use crate::clients::omniroute::OmniRouteClient;
 
     let models = app
-        .cursor
+        .omniroute
         .list_models()
         .await
-        .unwrap_or_else(|_| CursorClient::fallback_models());
+        .unwrap_or_else(|_| OmniRouteClient::fallback_models());
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "models": models,
