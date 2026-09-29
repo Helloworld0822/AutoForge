@@ -12,7 +12,9 @@ x-app-env: &app-env
   QUEUE_EVENTS_STREAM: autoforge.events
   ARTIFACTS_DIR: /data/artifacts
   MAX_IMAGE_BYTES: ${MAX_IMAGE_BYTES:-10485760}
-  CURSOR_API_KEY: ${CURSOR_API_KEY:-}
+  OMNIROUTE_API_KEY: ${OMNIROUTE_API_KEY:-}
+  # Set this to an address reachable from the containers; host loopback is not reachable here.
+  OMNIROUTE_BASE_URL: ${OMNIROUTE_BASE_URL:-}
   STITCH_API_KEY: ${STITCH_API_KEY:-}
   STITCH_ACCESS_TOKEN: ${STITCH_ACCESS_TOKEN:-}
   FIGMA_ACCESS_TOKEN: ${FIGMA_ACCESS_TOKEN:-}
@@ -37,7 +39,7 @@ x-app-env: &app-env
   MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-52428800}
 
 x-app-volumes: &app-volumes
-  - artifacts-data:/data/artifacts
+  - ${ARTIFACTS_HOST_DIR:-./data/artifacts}:/data/artifacts
 
 x-worker-limits: &worker-limits
   deploy:
@@ -167,4 +169,3 @@ services:
 
 volumes:
   redis-data:
-  artifacts-data:

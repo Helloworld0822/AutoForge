@@ -1,4 +1,4 @@
-pub mod cursor;
+pub mod omniroute;
 pub mod figma;
 pub mod github;
 pub mod slack;

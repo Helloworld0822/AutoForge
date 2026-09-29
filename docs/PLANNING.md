@@ -3,13 +3,13 @@
 ## Phase 0 — 기반 (1주차 상당)
 
 ### 목표
-Rust 워크스페이스 빌드 가능, Cursor API 연동 PoC.
+Rust 워크스페이스 빌드 가능, OmniRoute API 연동 PoC.
 
 ### 태스크
 
 | ID | 태스크 | 완료 기준 |
 |----|--------|-----------|
-| P0-1 | `cursor-client` — Create Agent + Get Run | Sonnet으로 "Hello" 응답 수신 |
+| P0-1 | `omniroute-client` — Chat Completions + model discovery | 모델 응답 수신 |
 | P0-2 | `shared` — 도메인 타입 + 에러 | `cargo test` 통과 |
 | P0-3 | `ingest` — lopdf 텍스트 추출 | 샘플 PDF → `raw_text.md` |
 | P0-4 | Docker Compose (PG + Redis + MinIO) | `docker compose up` 성공 |
@@ -47,7 +47,7 @@ Stitch 디자인 + Codex 구현 + PR 자동 생성.
 | P2-2 | `worker` — DesignExecutor | `screens/` S3 저장 |
 | P2-3 | architect ∥ design 병렬 스케줄링 | wall-clock 단축 확인 |
 | P2-4 | `worker` — ImplementExecutor (Codex) | GitHub PR URL 반환 |
-| P2-5 | Cursor agent에 Stitch MCP 인라인 등록 | 디자인 참조 구현 |
+| P2-5 | Codex CLI에 Stitch MCP 인라인 등록 | 디자인 참조 구현 |
 
 ---
 
@@ -76,7 +76,7 @@ Stitch 디자인 + Codex 구현 + PR 자동 생성.
 | P4-2 | 결제 연동 (토큰 사용량 기반) |
 | P4-3 | Web Dashboard (Next.js) |
 | P4-4 | Slack / Discord 알림 |
-| P4-5 | Cursor webhook v1 (run 완료 push) |
+| P4-5 | OmniRoute webhook v1 (run 완료 push) |
 
 ---
 
@@ -84,7 +84,8 @@ Stitch 디자인 + Codex 구현 + PR 자동 생성.
 
 ```bash
 # 필수
-CURSOR_API_KEY=           # Cursor Dashboard → API Keys
+OMNIROUTE_API_KEY=        # OmniRoute API key
+OMNIROUTE_BASE_URL=       # Base URL reachable from the app containers
 STITCH_API_KEY=           # Google Stitch
 DATABASE_URL=postgres://user:pass@localhost/autoforge
 REDIS_URL=redis://localhost:6379
@@ -128,7 +129,7 @@ device_type = "DESKTOP"
 
 | 리스크 | 영향 | 완화 |
 |--------|------|------|
-| Cursor API beta 변경 | 높음 | OpenAPI spec 버전 핀, adapter layer |
+| OmniRoute API 변경 | 높음 | 호환 API 스펙 점검, adapter layer |
 | Stitch 실험적 API | 중간 | HTML fallback, Figma 수동 export |
 | PDF 품질 편차 | 중간 | OCR fallback, 업로드 가이드 |
 | Codex 구현 품질 | 높음 | verify 루프, human review gate (optional) |
