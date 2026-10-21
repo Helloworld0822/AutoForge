@@ -4,7 +4,11 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf, process::Stdio, time::Duration};
-use tokio::{io::AsyncWriteExt, process::Command, sync::Mutex};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::Command,
+    sync::Mutex,
+};
 use tracing::instrument;
 
 #[derive(Clone)]
@@ -198,8 +202,12 @@ impl OmniRouteClient {
     ) -> Result<(String, String)> {
         let root = self.workspace_root.join(id);
         let home = root.join(".codex-home");
+        let cargo_home = root.join(".cargo-home");
         let repo = root.join("repo");
         tokio::fs::create_dir_all(&home).await.map_err(internal)?;
+        tokio::fs::create_dir_all(&cargo_home)
+            .await
+            .map_err(internal)?;
         let api_base = std::env::var("OMNIROUTE_CODEX_BASE_URL")
             .ok()
             .filter(|url| !url.trim().is_empty())
@@ -253,30 +261,23 @@ impl OmniRouteClient {
         .map_err(internal)??;
         let mut command = Command::new("codex");
         command
-            .args(["exec", "--full-auto", "--model", model, "--cd"])
+            .args([
+                "exec",
+                "--sandbox",
+                "workspace-write",
+                "--model",
+                model,
+                "--cd",
+            ])
             .arg(&repo)
+            .arg("--add-dir")
+            .arg(&cargo_home)
             .arg("-")
-            .stdin(Stdio::piped())
             .env("CODEX_HOME", &home)
+            .env("CARGO_HOME", &cargo_home)
             .env("OMNIROUTE_API_KEY", &self.api_key)
-            .env("OMNIROUTE_BASE_URL", api_base)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let mut child = command
-            .spawn()
-            .map_err(|e| AutoForgeError::OmniRouteApi(format!("Codex CLI unavailable: {e}")))?;
-        let output = tokio::time::timeout(Duration::from_secs(900), async {
-            let mut stdin = child
-                .stdin
-                .take()
-                .ok_or_else(|| internal("Codex stdin unavailable"))?;
-            stdin.write_all(prompt.as_bytes()).await.map_err(internal)?;
-            drop(stdin);
-            child.wait_with_output().await.map_err(internal)
-        })
-        .await
-        .map_err(|_| AutoForgeError::OmniRouteApi("Codex task timed out after 900s".into()))??;
+            .env("OMNIROUTE_BASE_URL", api_base);
+        let output = run_codex_command(command, prompt, Duration::from_secs(900)).await?;
         if !output.status.success() {
             return Err(AutoForgeError::OmniRouteApi(format!(
                 "Codex task failed: {}",
@@ -439,6 +440,94 @@ impl OmniRouteClient {
         .collect()
     }
 }
+
+// The npm launcher spawns the native CLI. Killing only the launcher leaves its
+// descendants running, so own a separate process group for the whole task.
+#[cfg(unix)]
+struct ProcessGroup(u32);
+
+#[cfg(unix)]
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        // SAFETY: the child was spawned as its own group leader. A negative PID
+        // targets that group, never the worker's process group.
+        unsafe {
+            libc::kill(-(self.0 as i32), libc::SIGKILL);
+        }
+    }
+}
+
+async fn run_codex_command(
+    mut command: Command,
+    prompt: &str,
+    timeout: Duration,
+) -> Result<std::process::Output> {
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
+        .spawn()
+        .map_err(|e| AutoForgeError::OmniRouteApi(format!("Codex CLI unavailable: {e}")))?;
+    #[cfg(unix)]
+    let group = ProcessGroup(
+        child
+            .id()
+            .ok_or_else(|| internal("Codex PID unavailable"))?,
+    );
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| internal("Codex stdin unavailable"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| internal("Codex stdout unavailable"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| internal("Codex stderr unavailable"))?;
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    // Drain both pipes while sending input, including prompts larger than pipe
+    // capacity, so an early CLI diagnostic cannot deadlock prompt delivery.
+    let result = tokio::time::timeout(timeout, async {
+        let (_, status, _, _) = tokio::try_join!(
+            async {
+                stdin.write_all(prompt.as_bytes()).await?;
+                drop(stdin);
+                Ok(())
+            },
+            child.wait(),
+            stdout.read_to_end(&mut out),
+            stderr.read_to_end(&mut err),
+        )
+        .map_err(internal)?;
+        Ok(std::process::Output {
+            status,
+            stdout: out,
+            stderr: err,
+        })
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(AutoForgeError::OmniRouteApi(format!(
+            "Codex task timed out after {}s",
+            timeout.as_secs()
+        )))
+    });
+    #[cfg(unix)]
+    drop(group);
+    if result.is_err() {
+        // Explicitly reap the launcher after timeout or I/O failure. On future
+        // cancellation the group guard and Tokio's kill-on-drop still apply.
+        let _ = child.kill().await;
+    }
+    result
+}
 // Chat completions cannot fetch artifact URLs. Include text content directly;
 // repository agents can also read binary inputs at their absolute local paths.
 async fn input_context(root: &std::path::Path, artifacts: &[ArtifactRef]) -> Result<String> {
@@ -554,6 +643,75 @@ pub struct CreateAgentOpts<'a> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[tokio::test]
+    async fn streams_large_prompt_and_captures_both_output_pipes() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf 'diagnostic' >&2; cat"]);
+        let prompt = "requirement\n".repeat(100_000);
+        let output = run_codex_command(command, &prompt, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, prompt.as_bytes());
+        assert_eq!(output.stderr, b"diagnostic");
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn assert_process_stopped(pid: &str) {
+        for _ in 0..100 {
+            match tokio::fs::read_to_string(format!("/proc/{pid}/stat")).await {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+                Ok(stat) if stat.rsplit_once(") ").unwrap().1.starts_with('Z') => return,
+                _ => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+        panic!("descendant {pid} is still running");
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn check_process_cleanup(cancel: bool) {
+        let pid_file =
+            std::env::temp_dir().join(format!("autoforge-child-{}", uuid::Uuid::new_v4()));
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "sleep 60 & echo $! > \"$1\"; wait", "launcher"])
+            .arg(&pid_file);
+        let task = tokio::spawn(run_codex_command(command, "", Duration::from_secs(1)));
+        let pid = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(pid) = tokio::fs::read_to_string(&pid_file).await {
+                    if !pid.trim().is_empty() {
+                        break pid.trim().to_owned();
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        if cancel {
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+        } else {
+            let error = task.await.unwrap().unwrap_err();
+            assert!(error.to_string().contains("timed out"));
+        }
+        assert_process_stopped(&pid).await;
+        tokio::fs::remove_file(pid_file).await.unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn timeout_stops_launcher_descendants() {
+        check_process_cleanup(false).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn cancellation_stops_launcher_descendants() {
+        check_process_cleanup(true).await;
+    }
 
     fn git(dir: &Path, args: &[&str]) -> String {
         let output = std::process::Command::new("git")
