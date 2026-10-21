@@ -13,6 +13,7 @@ x-app-env: &app-env
   ARTIFACTS_DIR: /data/artifacts
   MAX_IMAGE_BYTES: ${MAX_IMAGE_BYTES:-10485760}
   OMNIROUTE_API_KEY: ${OMNIROUTE_API_KEY:-}
+  OMNIROUTE_CODEX_BASE_URL: ${OMNIROUTE_CODEX_BASE_URL:-}
   # Set this to an address reachable from the containers; host loopback is not reachable here.
   OMNIROUTE_BASE_URL: ${OMNIROUTE_BASE_URL:-}
   STITCH_API_KEY: ${STITCH_API_KEY:-}
@@ -49,6 +50,15 @@ x-worker-limits: &worker-limits
         memory: 512M
 
 services:
+  # Bind mounts hide image ownership. Initialize only the mount root before
+  # starting the application processes as UID 10001.
+  artifacts-init:
+    image: ${IMAGE_PREFIX:-}autoforge-api:latest
+    user: "0:0"
+    entrypoint: ["chown", "10001:10001", "/data/artifacts"]
+    volumes: *app-volumes
+    restart: "no"
+
   nginx:
     build:
       context: .
@@ -85,6 +95,8 @@ services:
       - "8080"
     volumes: *app-volumes
     depends_on:
+      artifacts-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       rabbitmq:
@@ -110,6 +122,8 @@ services:
       ORCHESTRATOR_ID: orchestrator-1
     volumes: *app-volumes
     depends_on:
+      artifacts-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       rabbitmq:
@@ -124,6 +138,8 @@ services:
       <<: *app-env
     volumes: *app-volumes
     depends_on:
+      artifacts-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       rabbitmq:

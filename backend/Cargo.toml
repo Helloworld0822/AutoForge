@@ -37,6 +37,7 @@ clap = { version = "4", features = ["derive", "env"] }
 lopdf = "0.34"
 sha2 = "0.10"
 hex = "0.4"
+base64 = "0.22"
 dashmap = "6"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 lapin = { version = "2.5", default-features = false, features = ["rustls"] }

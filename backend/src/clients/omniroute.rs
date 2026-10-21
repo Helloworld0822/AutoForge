@@ -1,5 +1,6 @@
 use crate::domain::ModelProfile;
 use crate::error::{AutoForgeError, Result};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf, process::Stdio, time::Duration};
@@ -194,10 +195,12 @@ impl OmniRouteClient {
         let home = root.join(".codex-home");
         let repo = root.join("repo");
         tokio::fs::create_dir_all(&home).await.map_err(internal)?;
-        let api_base =
-            std::env::var("OMNIROUTE_CODEX_BASE_URL").unwrap_or_else(|_| self.base_url.clone());
+        let api_base = std::env::var("OMNIROUTE_CODEX_BASE_URL")
+            .ok()
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or_else(|| self.base_url.clone());
         let config = format!(
-            "model = {model:?}\nmodel_provider = \"omniroute\"\nmodel_reasoning_effort = \"high\"\n\n[model_providers.omniroute]\nname = \"OmniRoute\"\nbase_url = {api_base:?}\nenv_key = \"OMNIROUTE_API_KEY\"\nrequires_openai_auth = false\nwire_api = \"responses\"\n"
+            "model = {model:?}\nmodel_provider = \"omniroute\"\nmodel_reasoning_effort = \"high\"\n\n[sandbox_workspace_write]\nnetwork_access = true\n\n[model_providers.omniroute]\nname = \"OmniRoute\"\nbase_url = {api_base:?}\nenv_key = \"OMNIROUTE_API_KEY\"\nrequires_openai_auth = false\nwire_api = \"responses\"\n"
         );
         tokio::fs::write(home.join("config.toml"), config)
             .await
@@ -212,10 +215,7 @@ impl OmniRouteClient {
         let repo_clone = repo.clone();
         let checkout_branch = branch.clone();
         tokio::task::spawn_blocking(move || {
-            let mut c = std::process::Command::new("git");
-            if let Some(t) = token.as_deref() {
-                c.args(["-c", &format!("http.extraheader=AUTHORIZATION: Bearer {t}")]);
-            }
+            let mut c = git_command(token.as_deref());
             c.args([
                 "clone",
                 "--branch",
@@ -246,7 +246,8 @@ impl OmniRouteClient {
         })
         .await
         .map_err(internal)??;
-        let output = Command::new("codex")
+        let mut command = Command::new("codex");
+        command
             .args(["exec", "--full-auto", "--model", model, "--cd"])
             .arg(&repo)
             .arg(prompt)
@@ -255,8 +256,10 @@ impl OmniRouteClient {
             .env("OMNIROUTE_BASE_URL", api_base)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_secs(900), command.output())
             .await
+            .map_err(|_| AutoForgeError::OmniRouteApi("Codex task timed out after 900s".into()))?
             .map_err(|e| AutoForgeError::OmniRouteApi(format!("Codex CLI unavailable: {e}")))?;
         if !output.status.success() {
             return Err(AutoForgeError::OmniRouteApi(format!(
@@ -269,36 +272,7 @@ impl OmniRouteClient {
         let branch_push = branch.clone();
         let token = self.github_token.clone();
         tokio::task::spawn_blocking(move || {
-            let run = |args: &[&str]| -> Result<std::process::Output> {
-                let mut c = std::process::Command::new("git");
-                c.current_dir(&repo_push);
-                if let Some(t) = token.as_deref() {
-                    c.args(["-c", &format!("http.extraheader=AUTHORIZATION: Bearer {t}")]);
-                }
-                c.args(args);
-                c.output().map_err(internal)
-            };
-            let changed = run(&["status", "--porcelain"])?;
-            if !String::from_utf8_lossy(&changed.stdout).trim().is_empty() {
-                let _ = run(&["add", "-A"])?;
-                let _ = run(&[
-                    "-c",
-                    "user.name=AutoForge",
-                    "-c",
-                    "user.email=autoforge@localhost",
-                    "commit",
-                    "-m",
-                    "AutoForge implementation",
-                ])?;
-                let pushed = run(&["push", "origin", &branch_push])?;
-                if !pushed.status.success() {
-                    return Err(AutoForgeError::OmniRouteApi(format!(
-                        "git push failed: {}",
-                        String::from_utf8_lossy(&pushed.stderr)
-                    )));
-                }
-            }
-            Ok::<_, AutoForgeError>(())
+            publish_repository(&repo_push, &branch_push, token.as_deref())
         })
         .await
         .map_err(internal)??;
@@ -449,6 +423,62 @@ impl OmniRouteClient {
         .collect()
     }
 }
+// GitHub Git-over-HTTPS uses Basic auth with a token as the password.
+// Scope the header to GitHub and keep credentials out of command arguments and
+// the persisted repository configuration.
+fn git_command(token: Option<&str>) -> std::process::Command {
+    let mut command = std::process::Command::new("git");
+    command.env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(token) = token {
+        command
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "http.https://github.com/.extraheader")
+            .env(
+                "GIT_CONFIG_VALUE_0",
+                format!(
+                    "AUTHORIZATION: Basic {}",
+                    STANDARD.encode(format!("x-access-token:{token}"))
+                ),
+            );
+    }
+    command
+}
+
+fn publish_repository(repo: &std::path::Path, branch: &str, token: Option<&str>) -> Result<()> {
+    let run = |args: &[&str]| -> Result<std::process::Output> {
+        let output = git_command(token)
+            .current_dir(repo)
+            .args(args)
+            .output()
+            .map_err(internal)?;
+        if !output.status.success() {
+            return Err(AutoForgeError::OmniRouteApi(format!(
+                "git {} failed: {}",
+                args.first().unwrap_or(&"command"),
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        Ok(output)
+    };
+    let changed = run(&["status", "--porcelain"])?;
+    if !changed.stdout.is_empty() {
+        run(&["add", "-A"])?;
+        run(&[
+            "-c",
+            "user.name=AutoForge",
+            "-c",
+            "user.email=autoforge@localhost",
+            "commit",
+            "-m",
+            "AutoForge implementation",
+        ])?;
+    }
+    // Codex may have committed everything already. A clean working tree does
+    // not mean the remote branch exists or contains the agent's commits.
+    run(&["push", "origin", branch])?;
+    Ok(())
+}
+
 fn internal(e: impl std::fmt::Display) -> AutoForgeError {
     AutoForgeError::Internal(e.to_string())
 }
@@ -459,4 +489,167 @@ pub struct CreateAgentOpts<'a> {
     pub auto_create_pr: Option<bool>,
     pub agent_id: Option<&'a str>,
     pub pr_url: Option<&'a str>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    struct Repo {
+        root: PathBuf,
+        local: PathBuf,
+        remote: PathBuf,
+    }
+    impl Repo {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("autoforge-git-{}", uuid::Uuid::new_v4()));
+            let local = root.join("local");
+            let remote = root.join("remote.git");
+            std::fs::create_dir_all(&local).unwrap();
+            git(&root, &["init", "--bare", remote.to_str().unwrap()]);
+            git(&local, &["init", "-b", "main"]);
+            git(&local, &["config", "user.name", "Test"]);
+            git(&local, &["config", "user.email", "test@example.invalid"]);
+            std::fs::write(local.join("README.md"), "initial").unwrap();
+            git(&local, &["add", "README.md"]);
+            git(&local, &["commit", "-m", "initial"]);
+            git(
+                &local,
+                &["remote", "add", "origin", remote.to_str().unwrap()],
+            );
+            git(&local, &["push", "origin", "main"]);
+            git(&local, &["checkout", "-b", "autoforge/test"]);
+            Self {
+                root,
+                local,
+                remote,
+            }
+        }
+        fn assert_published(&self) {
+            assert_eq!(
+                git(&self.local, &["rev-parse", "HEAD"]),
+                git(&self.remote, &["rev-parse", "refs/heads/autoforge/test"])
+            );
+            assert!(git(&self.local, &["status", "--porcelain"]).is_empty());
+        }
+    }
+    impl Drop for Repo {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn publishes_commits_already_created_by_codex() {
+        let repo = Repo::new();
+        std::fs::write(repo.local.join("implementation.txt"), "done").unwrap();
+        git(&repo.local, &["add", "implementation.txt"]);
+        git(&repo.local, &["commit", "-m", "agent commit"]);
+        assert!(git(&repo.local, &["status", "--porcelain"]).is_empty());
+        publish_repository(&repo.local, "autoforge/test", None).unwrap();
+        repo.assert_published();
+        // Verify/read-only stages can publish an unchanged existing branch.
+        publish_repository(&repo.local, "autoforge/test", None).unwrap();
+        repo.assert_published();
+    }
+
+    #[test]
+    fn commits_and_publishes_uncommitted_agent_changes() {
+        let repo = Repo::new();
+        std::fs::write(repo.local.join("implementation.txt"), "done").unwrap();
+        publish_repository(&repo.local, "autoforge/test", None).unwrap();
+        repo.assert_published();
+        assert_eq!(
+            git(&repo.remote, &["show", "autoforge/test:implementation.txt"]),
+            "done"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commit_failure_is_reported_before_push() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = Repo::new();
+        let hook = repo.local.join(".git/hooks/pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(repo.local.join("implementation.txt"), "done").unwrap();
+        assert!(publish_repository(&repo.local, "autoforge/test", None).is_err());
+        assert!(
+            !git(&repo.remote, &["for-each-ref", "--format=%(refname)"]).contains("autoforge/test")
+        );
+    }
+
+    #[test]
+    fn git_auth_is_scoped_and_not_persisted() {
+        let repo = Repo::new();
+        let output = git_command(Some("test-token"))
+            .current_dir(&repo.local)
+            .args([
+                "config",
+                "--get-urlmatch",
+                "http.extraheader",
+                "https://github.com/owner/repo.git",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            format!(
+                "AUTHORIZATION: Basic {}",
+                STANDARD.encode("x-access-token:test-token")
+            )
+        );
+        let output = git_command(Some("test-token"))
+            .current_dir(&repo.local)
+            .args([
+                "config",
+                "--get-urlmatch",
+                "http.extraheader",
+                "https://example.invalid/repo.git",
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(!git(&repo.local, &["config", "--local", "--list"]).contains("test-token"));
+    }
+
+    #[test]
+    fn stage_defaults_belong_to_omniroute_catalog() {
+        use crate::domain::StageId;
+        let models = OmniRouteClient::fallback_models();
+        for stage in [
+            StageId::Summarize,
+            StageId::Architect,
+            StageId::Implement,
+            StageId::Verify,
+            StageId::Debug,
+            StageId::SecurityPatch,
+        ] {
+            let profile = ModelProfile::for_stage(stage);
+            assert!(models.iter().any(|model| model.id == profile.model_id));
+            if matches!(
+                stage,
+                StageId::Implement | StageId::Verify | StageId::Debug | StageId::SecurityPatch
+            ) {
+                assert!(profile.model_id.starts_with("cx/"));
+            }
+        }
+    }
 }
