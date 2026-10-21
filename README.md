@@ -40,7 +40,7 @@ nginx/Containerfile
 
 ```bash
 cp .env.example .env
-# .env 편집 (OMNIROUTE_API_KEY, GITHUB_TOKEN 등)
+# .env 편집 (OMNIROUTE_API_KEY, OMNIROUTE_BASE_URL, GITHUB_TOKEN 등)
 
 # Docker
 ./scripts/compose-up.sh
@@ -58,6 +58,15 @@ open http://localhost:8080
 | http://localhost:8080 | React 대시보드 (nginx, 기본 포트) |
 | http://localhost:8080/v1/projects | API |
 | http://localhost:8080/media/{filename} | 업로드된 이미지 (이미지 호스팅) |
+
+Compose는 `artifacts-init`에서 호스트 아티팩트 디렉터리의 소유자를 UID/GID
+`10001:10001`로 설정한 뒤 API와 worker를 시작합니다. 기존 데이터 디렉터리를
+옮겨 쓰는 경우 하위 파일도 이 계정에 쓰기 권한이 있어야 합니다.
+OmniRoute URL은 컨테이너에서 접근 가능한 `/v1` 주소를 지정하세요.
+Codex의 Responses API 주소가 다르면 `OMNIROUTE_CODEX_BASE_URL`을 설정하세요.
+모델 ID는 OmniRoute 인스턴스별로 다를 수 있으므로 모델 설정에서 실제 제공되는
+ID를 선택하세요. Implement/Verify/Debug/Security 단계는 Responses API와 Codex의
+도구 실행을 지원하는 모델을 사용해야 합니다.
 
 ## 로컬 개발 (분리 실행)
 
