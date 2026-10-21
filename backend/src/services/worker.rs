@@ -144,7 +144,14 @@ impl StageExecutor for SummarizeExecutor {
 
         let resp = ctx
             .omniroute
-            .create_agent(&prompt, &profile, CreateAgentOpts::default())
+            .create_agent(
+                &prompt,
+                &profile,
+                CreateAgentOpts {
+                    input_artifacts: &ctx.input,
+                    ..Default::default()
+                },
+            )
             .await?;
 
         let run = ctx
@@ -204,7 +211,14 @@ impl StageExecutor for ArchitectExecutor {
 
         let resp = ctx
             .omniroute
-            .create_agent(&prompt, &profile, CreateAgentOpts::default())
+            .create_agent(
+                &prompt,
+                &profile,
+                CreateAgentOpts {
+                    input_artifacts: &ctx.input,
+                    ..Default::default()
+                },
+            )
             .await?;
 
         let run = ctx
@@ -421,6 +435,7 @@ impl StageExecutor for ImplementExecutor {
             auto_create_pr: Some(true),
             agent_id: None,
             pr_url: None,
+            input_artifacts: &ctx.input,
         };
 
         let resp = ctx.omniroute.create_agent(&prompt, &profile, opts).await?;
@@ -466,7 +481,7 @@ impl StageExecutor for VerifyExecutor {
 
         let prompt = build_verify_prompt(ctx);
         let profile = ctx.model_config.profile_for(StageId::Verify);
-        let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
+        let opts = agent_opts(repo_url, ctx.pr_url.as_deref(), &ctx.input);
 
         let resp = ctx.omniroute.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
@@ -524,7 +539,7 @@ impl StageExecutor for DebugExecutor {
 
         let prompt = build_debug_prompt(ctx, &verify_meta);
         let profile = ctx.model_config.profile_for(StageId::Debug);
-        let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
+        let opts = agent_opts(repo_url, ctx.pr_url.as_deref(), &ctx.input);
 
         let resp = ctx.omniroute.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
@@ -579,7 +594,7 @@ impl StageExecutor for SecurityPatchExecutor {
 
         let prompt = build_security_prompt(ctx);
         let profile = ctx.model_config.profile_for(StageId::SecurityPatch);
-        let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
+        let opts = agent_opts(repo_url, ctx.pr_url.as_deref(), &ctx.input);
 
         let resp = ctx.omniroute.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
@@ -650,13 +665,18 @@ impl StageExecutor for DeliverExecutor {
     }
 }
 
-fn agent_opts<'a>(repo_url: &'a str, pr_url: Option<&'a str>) -> CreateAgentOpts<'a> {
+fn agent_opts<'a>(
+    repo_url: &'a str,
+    pr_url: Option<&'a str>,
+    input_artifacts: &'a [ArtifactRef],
+) -> CreateAgentOpts<'a> {
     CreateAgentOpts {
         repo_url: Some(repo_url),
         starting_ref: Some("main"),
         auto_create_pr: Some(false),
         agent_id: None,
         pr_url,
+        input_artifacts,
     }
 }
 
@@ -740,7 +760,14 @@ async fn run_architect_finalize_with_answers(
 
     let resp = ctx
         .omniroute
-        .create_agent(&prompt, &profile, CreateAgentOpts::default())
+        .create_agent(
+            &prompt,
+            &profile,
+            CreateAgentOpts {
+                input_artifacts: &ctx.input,
+                ..Default::default()
+            },
+        )
         .await?;
 
     let run = ctx

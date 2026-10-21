@@ -1,10 +1,10 @@
-use crate::domain::ModelProfile;
+use crate::domain::{ArtifactRef, ModelProfile};
 use crate::error::{AutoForgeError, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf, process::Stdio, time::Duration};
-use tokio::{process::Command, sync::Mutex};
+use tokio::{io::AsyncWriteExt, process::Command, sync::Mutex};
 use tracing::instrument;
 
 #[derive(Clone)]
@@ -82,6 +82,7 @@ impl OmniRouteClient {
         let workspace_root = PathBuf::from(artifacts_dir).join("omniroute-workspaces");
         std::fs::create_dir_all(&workspace_root)
             .map_err(|e| AutoForgeError::Internal(format!("workspace directory: {e}")))?;
+        let workspace_root = std::fs::canonicalize(workspace_root).map_err(internal)?;
         Ok(Self {
             http,
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -99,6 +100,10 @@ impl OmniRouteClient {
         profile: &ModelProfile,
         opts: CreateAgentOpts<'_>,
     ) -> Result<CreateAgentResponse> {
+        let context =
+            input_context(self.workspace_root.parent().unwrap(), opts.input_artifacts).await?;
+        let prompt_text = format!("{prompt_text}\n\n{context}");
+        let prompt_text = prompt_text.as_str();
         let agent_id = uuid::Uuid::new_v4().to_string();
         let run_id = uuid::Uuid::new_v4().to_string();
         let (text, branch, pr_url) = if let Some(repo_url) = opts.repo_url {
@@ -250,17 +255,28 @@ impl OmniRouteClient {
         command
             .args(["exec", "--full-auto", "--model", model, "--cd"])
             .arg(&repo)
-            .arg(prompt)
+            .arg("-")
+            .stdin(Stdio::piped())
             .env("CODEX_HOME", &home)
             .env("OMNIROUTE_API_KEY", &self.api_key)
             .env("OMNIROUTE_BASE_URL", api_base)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let output = tokio::time::timeout(Duration::from_secs(900), command.output())
-            .await
-            .map_err(|_| AutoForgeError::OmniRouteApi("Codex task timed out after 900s".into()))?
+        let mut child = command
+            .spawn()
             .map_err(|e| AutoForgeError::OmniRouteApi(format!("Codex CLI unavailable: {e}")))?;
+        let output = tokio::time::timeout(Duration::from_secs(900), async {
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| internal("Codex stdin unavailable"))?;
+            stdin.write_all(prompt.as_bytes()).await.map_err(internal)?;
+            drop(stdin);
+            child.wait_with_output().await.map_err(internal)
+        })
+        .await
+        .map_err(|_| AutoForgeError::OmniRouteApi("Codex task timed out after 900s".into()))??;
         if !output.status.success() {
             return Err(AutoForgeError::OmniRouteApi(format!(
                 "Codex task failed: {}",
@@ -423,6 +439,48 @@ impl OmniRouteClient {
         .collect()
     }
 }
+// Chat completions cannot fetch artifact URLs. Include text content directly;
+// repository agents can also read binary inputs at their absolute local paths.
+async fn input_context(root: &std::path::Path, artifacts: &[ArtifactRef]) -> Result<String> {
+    let root = tokio::fs::canonicalize(root).await.map_err(internal)?;
+    let mut context = String::from("Input artifacts (local paths and text contents):\n");
+    for artifact in artifacts {
+        let key = std::path::Path::new(&artifact.key);
+        if key.is_absolute()
+            || key.components().any(|part| {
+                matches!(
+                    part,
+                    std::path::Component::ParentDir | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            return Err(AutoForgeError::BadRequest(
+                "invalid input artifact key".into(),
+            ));
+        }
+        let path = tokio::fs::canonicalize(root.join(key))
+            .await
+            .map_err(internal)?;
+        if !path.starts_with(&root) {
+            return Err(AutoForgeError::BadRequest(
+                "input artifact escapes storage root".into(),
+            ));
+        }
+        context.push_str(&format!(
+            "\nArtifact: {}\nLocal file: {}\n",
+            artifact.name,
+            path.display()
+        ));
+        if artifact.content_type.starts_with("text/") || artifact.content_type == "application/json"
+        {
+            let content = tokio::fs::read_to_string(&path).await.map_err(internal)?;
+            context.push_str(&content);
+            context.push('\n');
+        }
+    }
+    Ok(context)
+}
+
 // GitHub Git-over-HTTPS uses Basic auth with a token as the password.
 // Scope the header to GitHub and keep credentials out of command arguments and
 // the persisted repository configuration.
@@ -489,6 +547,7 @@ pub struct CreateAgentOpts<'a> {
     pub auto_create_pr: Option<bool>,
     pub agent_id: Option<&'a str>,
     pub pr_url: Option<&'a str>,
+    pub input_artifacts: &'a [ArtifactRef],
 }
 
 #[cfg(test)]
@@ -651,5 +710,77 @@ mod tests {
                 assert!(profile.model_id.starts_with("cx/"));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    fn artifact(key: &str, content_type: &str) -> ArtifactRef {
+        ArtifactRef {
+            name: key.into(),
+            key: key.into(),
+            uri: format!("http://unreachable/artifacts/{key}"),
+            content_type: content_type.into(),
+            sha256: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn includes_document_body_and_binary_local_path() {
+        let root = std::env::temp_dir().join(format!("autoforge-input-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        tokio::fs::write(
+            root.join("raw_text.md"),
+            "Unique customer requirement: offline reporting",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(root.join("screen.png"), [137, 80, 78, 71])
+            .await
+            .unwrap();
+        let context = input_context(
+            &root,
+            &[
+                artifact("raw_text.md", "text/markdown"),
+                artifact("screen.png", "image/png"),
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(context.contains("Unique customer requirement: offline reporting"));
+        assert!(context.contains(root.join("screen.png").to_str().unwrap()));
+        assert!(!context.contains("http://unreachable"));
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_input_path_traversal() {
+        let root = std::env::temp_dir();
+        assert!(
+            input_context(&root, &[artifact("../outside.txt", "text/plain")])
+                .await
+                .is_err()
+        );
+        assert!(
+            input_context(&root, &[artifact("/outside.txt", "text/plain")])
+                .await
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rejects_symlink_outside_storage() {
+        let root = std::env::temp_dir().join(format!("autoforge-input-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", root.join("escape.txt")).unwrap();
+        assert!(
+            input_context(&root, &[artifact("escape.txt", "text/plain")])
+                .await
+                .is_err()
+        );
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
 }
