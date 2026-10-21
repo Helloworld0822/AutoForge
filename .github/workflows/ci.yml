@@ -83,6 +83,24 @@ jobs:
       - name: Build images
         run: docker compose -f compose.yml build
 
+      - name: Verify repository task tools as the application user
+        run: |
+          docker compose -f compose.yml run --rm --no-deps --entrypoint sh worker -ec '
+            test "$(id -u)" = 10001
+            test "$(codex --version)" = "codex-cli 0.163.0"
+            codex exec --sandbox workspace-write --help >/dev/null
+            task_dir=$(mktemp -d)
+            trap '\''rm -rf "$task_dir"'\'' EXIT
+            export CARGO_HOME="$task_dir/cargo-home"
+            mkdir -p "$CARGO_HOME"
+            cargo new --vcs none "$task_dir/check-tools"
+            cd "$task_dir/check-tools"
+            cargo check --offline
+            cargo test --offline
+            cargo clippy --offline -- -D warnings
+            cargo fmt --check
+          '
+
       - name: Start stack
         run: docker compose -f compose.yml up -d --wait --wait-timeout 180
 

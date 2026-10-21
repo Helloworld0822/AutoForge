@@ -1,20 +1,27 @@
 # syntax=docker/dockerfile:1
 
-FROM docker.io/library/rust:1-bookworm AS builder
+FROM docker.io/library/rust:1-bookworm AS rust-tools
+RUN rustup component add clippy rustfmt
+
+FROM rust-tools AS builder
 WORKDIR /build
 COPY Cargo.toml ./
 COPY Cargo.lock* ./
 COPY src ./src
 RUN cargo build --release
 
-FROM docker.io/library/debian:bookworm-slim AS runtime
+# Repository tasks execute here, so retain Rust and the native build toolchain.
+FROM rust-tools AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     git \
+    nodejs \
+    npm \
     poppler-utils \
     wget \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin autoforge
+RUN npm install --global @openai/codex@0.163.0
 
 WORKDIR /app
 COPY --from=builder /build/target/release/autoforge /usr/local/bin/autoforge
