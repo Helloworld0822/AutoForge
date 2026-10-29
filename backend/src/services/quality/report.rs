@@ -85,7 +85,7 @@ impl SecurityReport {
             passed: true,
             vulnerabilities_found: 0,
             patches_applied: vec![],
-            audit_tools: vec!["cursor-agent".into()],
+            audit_tools: vec!["Codex CLI via OmniRoute".into()],
             summary: text.chars().take(200).collect(),
         }
     }

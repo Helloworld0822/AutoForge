@@ -14,8 +14,6 @@ CREATE TABLE IF NOT EXISTS stage_runs (
     project_id      UUID NOT NULL REFERENCES projects(id),
     stage           TEXT NOT NULL,
     state           TEXT NOT NULL DEFAULT 'queued',
-    cursor_agent_id TEXT,
-    cursor_run_id   TEXT,
     input_artifacts JSONB NOT NULL DEFAULT '[]',
     output_artifacts JSONB NOT NULL DEFAULT '[]',
     error           TEXT,

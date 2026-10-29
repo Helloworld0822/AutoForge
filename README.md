@@ -40,7 +40,7 @@ nginx/Containerfile
 
 ```bash
 cp .env.example .env
-# .env 편집 (CURSOR_API_KEY, GITHUB_TOKEN 등)
+# .env 편집 (OMNIROUTE_API_KEY, OMNIROUTE_BASE_URL, GITHUB_TOKEN 등)
 
 # Docker
 ./scripts/compose-up.sh
@@ -59,6 +59,15 @@ open http://localhost:8080
 | http://localhost:8080/v1/projects | API |
 | http://localhost:8080/media/{filename} | 업로드된 이미지 (이미지 호스팅) |
 
+Compose는 `artifacts-init`에서 호스트 아티팩트 디렉터리의 소유자를 UID/GID
+`10001:10001`로 설정한 뒤 API와 worker를 시작합니다. 기존 데이터 디렉터리를
+옮겨 쓰는 경우 하위 파일도 이 계정에 쓰기 권한이 있어야 합니다.
+OmniRoute URL은 컨테이너에서 접근 가능한 `/v1` 주소를 지정하세요.
+Codex의 Responses API 주소가 다르면 `OMNIROUTE_CODEX_BASE_URL`을 설정하세요.
+모델 ID는 OmniRoute 인스턴스별로 다를 수 있으므로 모델 설정에서 실제 제공되는
+ID를 선택하세요. Implement/Verify/Debug/Security 단계는 Responses API와 Codex의
+도구 실행을 지원하는 모델을 사용해야 합니다.
+
 ## 로컬 개발 (분리 실행)
 
 ```bash
@@ -72,7 +81,7 @@ cd frontend && npm install && npm run dev
 
 ## GitHub 자동화
 
-`GITHUB_TOKEN` 설정 시 프라이빗 레포 자동 생성 → Cursor PR 생성 → SecurityPatch 통과 후 자동 merge.
+`GITHUB_TOKEN` 설정 시 프라이빗 레포 자동 생성 → OmniRoute Codex 작업/PR 생성 → SecurityPatch 통과 후 자동 merge.
 
 ```bash
 export GITHUB_TOKEN=ghp_xxxx
@@ -85,7 +94,7 @@ export GITHUB_AUTO_MERGE=true   # 기본값
 | Method | Path | 설명 | 인증 |
 |--------|------|------|------|
 | GET | `/health` | Liveness (프로세스 생존) | ❌ |
-| GET | `/ready` | Readiness (스토어/Redis/Cursor/Stitch 프로브) | ❌ |
+| GET | `/ready` | Readiness (스토어/Redis/OmniRoute/Stitch 프로브) | ❌ |
 | POST | `/v1/projects` | PDF 업로드 + DevOps 계획서(선택) + 파이프라인 시작 | ✅ |
 | GET | `/v1/projects` | 프로젝트 목록 | ✅ |
 | GET | `/v1/projects/{id}` | 프로젝트 상세 | ✅ |
@@ -135,25 +144,24 @@ curl -X POST http://localhost/v1/images \
 전체 목록은 [.env.example](.env.example) 참고. 주요 카테고리:
 
 - **서버**: `HOST`, `PORT`, `RUST_LOG`
-- **AI API 키**: `CURSOR_API_KEY`, `STITCH_API_KEY`, Stitch Bearer (`STITCH_ACCESS_TOKEN` 또는 ADC/gcloud 자동 갱신 — [상세](docs/STITCH_ACCESS_TOKEN.md))
+- **AI API 키**: `OMNIROUTE_API_KEY`, `OMNIROUTE_BASE_URL`, `STITCH_API_KEY`, Stitch Bearer (`STITCH_ACCESS_TOKEN` 또는 ADC/gcloud 자동 갱신 — [상세](docs/STITCH_ACCESS_TOKEN.md))
 - **GitHub 자동화**: `GITHUB_TOKEN`, `GITHUB_ORG`, `GITHUB_AUTO_MERGE`
 - **보안**: `API_KEY`, `CORS_ALLOWED_ORIGINS`, `MAX_UPLOAD_BYTES` — 운영 배포 전 반드시 확인
-- **아티팩트/이미지 저장소 (로컬 디스크)**: `ARTIFACTS_DIR`, `MAX_IMAGE_BYTES`
+- **아티팩트/이미지 및 Codex 작업 폴더 (호스트 디렉터리)**: `ARTIFACTS_HOST_DIR` (기본 `./data/artifacts`), `MAX_IMAGE_BYTES`. 컨테이너의 파이프라인 산출물과 `omniroute-workspaces/`가 이 폴더에 저장되어 호스트에서 바로 열 수 있습니다.
 - **RabbitMQ (분산 모드)**: `MESSAGE_QUEUE_ENABLED`, `RABBITMQ_URL` 등 — 기본값은 단일 프로세스(false). Redis는 프로젝트 스토어/알림용
 - **Slack 알림**: `SLACK_WEBHOOK_URL` 또는 `SLACK_BOT_TOKEN`+`SLACK_CHANNEL`
 
-서버 기동 시 누락되거나 위험한 설정(예: `API_KEY` 미설정, `CURSOR_API_KEY` 비어있음)은
+서버 기동 시 누락되거나 위험한 설정(예: `API_KEY` 미설정, `OMNIROUTE_API_KEY` 비어있음)은
 로그에 경고로 출력됩니다.
 
 ## 운영 환경 체크리스트
 
 실사용(프로덕션) 배포 전 최소한 아래 항목을 확인하세요.
 
-- [ ] `CURSOR_API_KEY`, `STITCH_API_KEY`, `STITCH_ACCESS_TOKEN` 설정 — Design 단계에 Stitch Bearer 토큰 필수 ([docs/STITCH_ACCESS_TOKEN.md](docs/STITCH_ACCESS_TOKEN.md))
+- [ ] `OMNIROUTE_API_KEY`, `OMNIROUTE_BASE_URL`, `STITCH_API_KEY`, `STITCH_ACCESS_TOKEN` 설정 — Design 단계에 Stitch Bearer 토큰 필수 ([docs/STITCH_ACCESS_TOKEN.md](docs/STITCH_ACCESS_TOKEN.md))
 - [ ] `API_KEY` 설정 — 미설정 시 REST API가 인증 없이 공개됨
 - [ ] `CORS_ALLOWED_ORIGINS`를 실제 프론트엔드 도메인으로 제한
-- [ ] `ARTIFACTS_DIR`가 영속 볼륨(디스크)을 가리키는지 확인 — Compose 환경에서는
-  `artifacts-data` 볼륨이 api/worker/orchestrator 간에 공유되도록 이미 구성되어 있음
+- [ ] `ARTIFACTS_HOST_DIR`가 영속 디렉터리를 가리키는지 확인 — 기본 `./data/artifacts` 폴더가 api/worker/orchestrator 간에 공유되고 호스트에서도 직접 확인할 수 있음
 - [ ] nginx에 TLS 인증서 적용 (`nginx/nginx.conf`의 HTTPS 서버 블록 주석 참고)
 - [ ] 여러 호스트(노드)에 분산 배포하는 경우 `ARTIFACTS_DIR`를 NFS 등 네트워크 파일시스템으로 교체
 - [ ] CI(`.github/workflows/ci.yml`)가 통과하는지 확인 (fmt/clippy/test/build + compose smoke test)
