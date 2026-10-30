@@ -186,6 +186,7 @@ export function ProjectDetailPage() {
       </section>
 
       <DailyLogPanel projectId={project.id} />
+      <Link className="workspace-button mb-5 inline-flex" to={`/estimates?title=${encodeURIComponent(name)}`}>이 프로젝트 견적 작성</Link>
 
       <section className="mb-5 rounded-lg border border-border bg-card p-5 md:p-6">
         <h3 className="mb-4 text-base font-medium">GitHub & 산출물</h3>

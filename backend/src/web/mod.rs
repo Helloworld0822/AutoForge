@@ -1,4 +1,5 @@
 mod auth;
+mod estimates;
 mod handlers;
 mod routes;
 mod ws;

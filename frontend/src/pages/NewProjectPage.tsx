@@ -98,11 +98,11 @@ export function NewProjectPage() {
         </p>
       </header>
 
-      <div className="mx-auto w-full max-w-4xl px-8 py-8">
+      <div className="mx-auto w-full max-w-4xl px-5 py-8 sm:px-8">
         <ModelConfigPanel value={modelConfig} onChange={setModelConfig} />
 
         <form
-          className="mb-8 rounded-xl border border-border bg-surface-container-low p-6 md:p-8"
+          className="mb-8 rounded-xl border border-border bg-surface-container-low p-5 md:p-8"
           onSubmit={onSubmit}
         >
           <SectionTitle icon="description" title="외주 계획서 (PDF) — 필수" />

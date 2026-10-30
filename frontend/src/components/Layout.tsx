@@ -8,6 +8,7 @@ const nav = [
   { to: '/', label: '대시보드', icon: 'dashboard' },
   { to: '/new', label: '새 프로젝트', icon: 'add_box' },
   { to: '/images', label: '이미지 호스팅', icon: 'image' },
+  { to: '/estimates', label: '견적 작성', icon: 'request_quote' },
 ] as const;
 
 const statusItems = [
@@ -42,9 +43,9 @@ export function Layout() {
   }, []);
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <aside className="z-50 flex h-screen w-[260px] shrink-0 flex-col justify-between border-r border-border bg-bg-elevated px-4 py-8">
-        <div className="flex flex-col gap-8">
+    <div className="flex h-dvh flex-col overflow-hidden md:flex-row">
+      <aside className="z-50 flex w-full shrink-0 flex-col justify-between border-b border-border bg-bg-elevated px-4 py-4 md:h-dvh md:w-[260px] md:border-r md:border-b-0 md:py-8">
+        <div className="flex flex-col gap-4 md:gap-8">
           <div className="flex items-center gap-4 px-2">
             <div className="flex size-10 items-center justify-center rounded-xl bg-accent text-[#002a65] shadow-lg shadow-accent/20">
               <span className="material-symbols-outlined material-symbols-filled text-xl">
@@ -59,16 +60,16 @@ export function Layout() {
             </div>
           </div>
 
-          <nav className="flex flex-col gap-1">
+          <nav className="flex flex-wrap gap-1 md:flex-col">
             {nav.map(({ to, label, icon }) => {
               const active = location.pathname === to;
               return (
                 <Link
                   key={to}
                   to={to}
-                  className={`flex items-center gap-4 px-4 py-2 transition-all ${
+                  className={`flex min-h-11 items-center gap-2 rounded-lg px-3 py-2 transition-colors md:gap-4 md:px-4 ${
                     active
-                      ? 'border-l-4 border-primary bg-surface-variant text-primary'
+                      ? 'bg-surface-variant text-primary'
                       : 'text-muted hover:bg-surface-variant'
                   }`}
                 >
@@ -84,7 +85,7 @@ export function Layout() {
           </nav>
         </div>
 
-        <div className="flex flex-col gap-1 border-t border-border/30 pt-6">
+        <div className="flex flex-col gap-1 border-t border-border/30 pt-3 md:pt-6">
           {user?.session_login_enabled && user.authenticated && (
             <div className="mb-2 flex items-center justify-between rounded-lg px-4 py-2">
               <div className="flex flex-col gap-0.5">
@@ -107,7 +108,7 @@ export function Layout() {
             return (
               <div
                 key={key}
-                className="flex items-center justify-between rounded-lg px-4 py-2 text-muted transition-colors hover:bg-surface-variant"
+                className="hidden items-center justify-between rounded-lg px-4 py-2 text-muted transition-colors hover:bg-surface-variant md:flex"
               >
                 <div className="flex items-center gap-4">
                   <span className="material-symbols-outlined text-xl">{icon}</span>
@@ -122,7 +123,7 @@ export function Layout() {
         </div>
       </aside>
 
-      <main className="custom-scrollbar flex-1 overflow-y-auto bg-bg">
+      <main className="custom-scrollbar min-h-0 min-w-0 flex-1 overflow-y-auto bg-bg">
         <Outlet />
       </main>
     </div>

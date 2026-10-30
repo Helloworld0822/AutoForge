@@ -1,0 +1,48 @@
+.workspace-input {
+  width: 100%; min-width: 0; padding: .625rem .75rem;
+  border: 1px solid var(--color-outline); border-radius: var(--radius-lg);
+  background: var(--color-surface-container-lowest); color: var(--color-foreground);
+  color-scheme: dark;
+}
+.workspace-button {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 44px; min-width: 148px; padding: .625rem 1rem;
+  border: 1px solid var(--color-border); border-radius: var(--radius-lg);
+  background: var(--color-card); color: var(--color-foreground); cursor: pointer;
+}
+.workspace-button:hover { background: var(--color-surface-variant); }
+.workspace-button:active { opacity: .8; }
+.workspace-primary { background: var(--color-accent); color: var(--color-bg); font-weight: 600; }
+.workspace-primary:hover { background: var(--color-primary); }
+.workspace-button:disabled, fieldset:disabled .workspace-button { opacity: .5; cursor: wait; }
+.workspace-input:focus-visible, .workspace-button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
+.estimate-item { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); }
+.estimate-item > div:last-child { grid-column: 1 / -1; }
+.estimate-print { display: none; }
+@media (max-width: 640px) {
+  .estimate-item { grid-template-columns: 1fr; }
+  .estimate-page { overflow-wrap: anywhere; }
+}
+@page { size: A4; margin: 18mm 15mm; }
+@media print {
+  body:has(> .estimate-print) > *:not(.estimate-print) { display: none !important; }
+  body:has(> .estimate-print) { background: white !important; color: #111 !important; }
+  .estimate-print { display: block; font: 10pt/1.6 Arial, 'Noto Sans CJK KR', sans-serif; color: #111; overflow-wrap: anywhere; }
+  .estimate-print header { margin-bottom: 8mm; }
+  .estimate-print h1 { font-size: 26pt; margin-bottom: 3mm; }
+  .estimate-print h2 { font-size: 15pt; margin-bottom: 3mm; }
+  .estimate-print h3 { font-size: 11pt; break-after: avoid; margin-bottom: 2mm; }
+  .estimate-parties { display: grid; grid-template-columns: 20mm 1fr; gap: 2mm 4mm; margin-bottom: 6mm; }
+  .estimate-parties dt { color: #444; }
+  .estimate-notice { border: 1px solid #aaa; padding: 3mm; margin-bottom: 6mm; }
+  .estimate-print table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .estimate-print th, .estimate-print td { border-bottom: 1px solid #bbb; padding: 2mm; vertical-align: top; text-align: right; }
+  .estimate-print th:first-child, .estimate-print td:first-child { text-align: left; }
+  .estimate-print th { border-top: 1px solid #333; background: #eee; }
+  .estimate-print thead { display: table-header-group; }
+  .estimate-print tr { break-inside: avoid; }
+  .estimate-totals { margin: 5mm 0 8mm auto; max-width: 85mm; break-inside: avoid; }
+  .estimate-totals p { display: flex; justify-content: space-between; gap: 3mm; padding: 1mm 0; }
+  .estimate-totals p:last-child { border-top: 1px solid #333; font-size: 13pt; margin-top: 2mm; padding-top: 3mm; }
+  .estimate-notes p { white-space: pre-wrap; orphans: 3; widows: 3; }
+}

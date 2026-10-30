@@ -1,4 +1,7 @@
 import type {
+  Estimate,
+  EstimateInput,
+  EstimateGenerationResult,
   AuthMeResponse,
   CreateProjectResponse,
   DailyLog,
@@ -17,6 +20,28 @@ import type {
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 const API_KEY = import.meta.env.VITE_API_KEY as string | undefined;
 
+export function listEstimates(): Promise<Estimate[]> {
+  return request('/v1/estimates');
+}
+
+export function saveEstimate(draft: EstimateInput, id: string | null): Promise<Estimate> {
+  return request(id ? `/v1/estimates/${id}` : '/v1/estimates', {
+    method: id ? 'PUT' : 'POST',
+    body: JSON.stringify(draft),
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+export function generateEstimate(input: { requirements: string; daily_rate: number; title: string }): Promise<{ id: string }> {
+  return request('/v1/estimates/generate', {
+    method: 'POST', body: JSON.stringify(input), headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+export function getEstimateGeneration(id: string): Promise<EstimateGenerationResult> {
+  return request(`/v1/estimates/generations/${id}`);
+}
+
 function authHeaders(existing?: HeadersInit): HeadersInit {
   if (!API_KEY) return existing ?? {};
   return { ...(existing ?? {}), Authorization: `Bearer ${API_KEY}` };
@@ -34,7 +59,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, fetchOptions(init));
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(body || `HTTP ${res.status}`);
+    let message = body;
+    try {
+      const parsed: unknown = JSON.parse(body);
+      if (typeof parsed === 'object' && parsed !== null && 'error' in parsed && typeof parsed.error === 'string') message = parsed.error;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+    throw new Error(message || `HTTP ${res.status}`);
   }
   return res.json() as Promise<T>;
 }

@@ -93,7 +93,7 @@ export function ModelConfigPanel({ value, onChange, defaultExpanded = false }: M
         className="flex w-full items-center justify-between text-left"
         onClick={() => setExpanded((v) => !v)}
       >
-        <div>
+        <div className="min-w-0">
           <h3 className="flex items-center gap-2 font-headline text-base font-semibold">
             <span className="material-symbols-outlined text-lg text-accent">tune</span>
             AI 모델 설정
@@ -102,7 +102,7 @@ export function ModelConfigPanel({ value, onChange, defaultExpanded = false }: M
             스테이지별 모델을 선택하세요. 비워두면 기본값이 사용됩니다.
           </p>
         </div>
-        <span className="material-symbols-outlined text-muted">
+        <span className="material-symbols-outlined shrink-0 text-muted">
           {expanded ? 'expand_less' : 'expand_more'}
         </span>
       </button>

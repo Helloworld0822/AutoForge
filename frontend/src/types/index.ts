@@ -156,6 +156,37 @@ export interface PipelineModelConfig {
   figma_file_url?: string;
 }
 
+export interface EstimateItem {
+  readonly description: string;
+  readonly quantity: number;
+  readonly unit_price: number;
+}
+
+export interface EstimateInput {
+  readonly requirements: string;
+  readonly daily_rate: number | null;
+  readonly title: string;
+  readonly customer: string;
+  readonly supplier: string;
+  readonly issued_on: string;
+  readonly valid_until: string;
+  readonly items: readonly EstimateItem[];
+  readonly include_vat: boolean;
+  readonly notes: string;
+}
+
+export interface Estimate extends EstimateInput {
+  readonly id: string;
+  readonly subtotal: number;
+  readonly vat: number;
+  readonly total: number;
+}
+
+export type EstimateGenerationResult =
+  | { readonly status: 'running' }
+  | { readonly status: 'failed'; readonly error: string }
+  | { readonly status: 'completed'; readonly draft: EstimateInput };
+
 export interface CursorModel {
   id: string;
   name?: string | null;

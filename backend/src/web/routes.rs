@@ -2,6 +2,7 @@ use actix_web::middleware::from_fn;
 use actix_web::web;
 
 use super::auth::{auth_me, login, logout, require_auth};
+use super::estimates;
 use super::handlers;
 use super::ws;
 
@@ -21,6 +22,15 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                         .route("/images", web::post().to(handlers::upload_image))
                         .route("/images", web::get().to(handlers::list_images))
                         .route("/models", web::get().to(handlers::list_models))
+                        .route("/estimates", web::get().to(estimates::list))
+                        .route("/estimates", web::post().to(estimates::create))
+                        .route("/estimates/generate", web::post().to(estimates::generate))
+                        .route(
+                            "/estimates/generations/{id}",
+                            web::get().to(estimates::generation),
+                        )
+                        .route("/estimates/{id}", web::get().to(estimates::get))
+                        .route("/estimates/{id}", web::put().to(estimates::update))
                         .route("/projects", web::post().to(handlers::create_project))
                         .route("/projects", web::get().to(handlers::list_projects))
                         .route("/projects/ws", web::get().to(ws::projects_websocket))

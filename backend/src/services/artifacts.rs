@@ -29,6 +29,25 @@ pub struct LocalArtifactStore {
 /// 이미지 호스팅 하위 디렉터리 (media/{filename})
 pub const MEDIA_DIR: &str = "media";
 
+/// Write settings as one atomic replacement so readers never observe partial JSON.
+pub async fn save_json(base: &Path, key: &str, value: &impl serde::Serialize) -> Result<()> {
+    let path = base.join(key);
+    let parent = path
+        .parent()
+        .ok_or_else(|| AutoForgeError::Store("missing parent".into()))?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|e| AutoForgeError::Store(e.to_string()))?;
+    let temp = parent.join(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let bytes = serde_json::to_vec(value).map_err(|e| AutoForgeError::Store(e.to_string()))?;
+    tokio::fs::write(&temp, bytes)
+        .await
+        .map_err(|e| AutoForgeError::Store(e.to_string()))?;
+    tokio::fs::rename(&temp, &path)
+        .await
+        .map_err(|e| AutoForgeError::Store(e.to_string()))
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MediaEntry {
     pub filename: String,

@@ -7,6 +7,7 @@ import { ImageHostingPage } from './pages/ImageHostingPage';
 import { LoginPage } from './pages/LoginPage';
 import { NewProjectPage } from './pages/NewProjectPage';
 import { ProjectDetailPage } from './pages/ProjectDetailPage';
+import { EstimatesPage } from './pages/EstimatesPage';
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
               <Route path="new" element={<NewProjectPage />} />
               <Route path="projects/:id" element={<ProjectDetailPage />} />
               <Route path="images" element={<ImageHostingPage />} />
+              <Route path="estimates" element={<EstimatesPage />} />
             </Route>
           </Route>
         </Routes>
