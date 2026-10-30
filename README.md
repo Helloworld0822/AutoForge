@@ -82,6 +82,36 @@ export GITHUB_AUTO_MERGE=true   # 기본값
 
 ## API 엔드포인트
 
+### 견적과 코딩 스킬
+
+대시보드의 **견적 작성**에서 PDF 계획서나 파이프라인 실행 없이 견적을 작성할 수 있습니다.
+요구사항과 1일 단가를 입력하고 **AI 가견적 생성**을 누르면 Cursor의 기본 요약 모델이
+작업별 예상 인일과 가정·제외사항을 제안합니다. AI 가견적에는 `CURSOR_API_KEY`가 필요합니다.
+생성은 비동기로 진행되며 최대 15분간 결과를 조회합니다. 생성된 항목과 단가를 수정한 뒤
+저장하거나, **가견적서 PDF / 견적서 PDF**를 눌러 브라우저 인쇄 창에서 **PDF로 저장**을 선택하세요.
+수량은 정수(최대 10,000), 단가는 원 단위(최대 10억 원)이며 합계는 최대 1조 원입니다.
+부가세 가산 시 공급가액 합계의 10%를 계산하고 원 미만은 버립니다.
+견적·요구사항·단가는 `ARTIFACTS_DIR/estimates/`에 저장됩니다. 컨테이너에서는 기존 산출물 볼륨을 유지해야 합니다.
+
+새 프로젝트에서 **코딩 스킬 · 토큰 절약**을 선택하거나, 프로젝트 상세 화면에서 실행 중에도
+변경할 수 있습니다. 관련 코드만 읽기, 최소 변경, 출력 요약 지침과 사용자 Markdown 지침
+(직접 입력 또는 `SKILL.md`, 최대 4,000자)을 지원합니다. 선택한 지침만 Implement, Verify,
+Debug, Security 단계의 프롬프트에 포함합니다. 실행 중 변경은 **다음 단계부터** 적용됩니다.
+Markdown에 연결된 스크립트·외부 스킬을 설치하지 않으며 실제 토큰 절감량을 보장하지 않습니다.
+실행 중 설정은 프로젝트 상태와 별도 파일에 저장하므로 파이프라인 결과 저장으로 덮어쓰지 않습니다.
+
+| Method | 경로 | 설명 |
+|--------|------|------|
+| GET / POST | `/v1/estimates` | 견적 목록 / 신규 저장 |
+| GET / PUT | `/v1/estimates/{id}` | 견적 조회 / 수정 |
+| POST | `/v1/estimates/generate` | `{title, requirements, daily_rate}`로 AI 가견적 요청 |
+| GET | `/v1/estimates/generations/{id}` | 생성 상태와 편집 가능한 가견적 조회 |
+| GET / PUT | `/v1/projects/{id}/skills` | `{enabled, custom_markdown}` 스킬 조회 / 적용 |
+
+스킬 ID: `targeted_read`, `minimal_diff`, `concise_output`.
+프로젝트 생성 시 `model_config.coding_skills`로도 지정할 수 있으며, 이후 저장한 상세 화면 설정이 우선합니다.
+
+
 | Method | Path | 설명 | 인증 |
 |--------|------|------|------|
 | GET | `/health` | Liveness (프로세스 생존) | ❌ |
