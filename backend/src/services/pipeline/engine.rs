@@ -54,6 +54,12 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
         .filter_map(|q| q.answer.as_ref().map(|a| (q.id.clone(), a.clone())))
         .collect();
 
+    let mut model_config = project.model_config.clone();
+    if let Some(skills) =
+        crate::services::coding_skills::load_override(app.media.base_dir(), project_id).await?
+    {
+        model_config.coding_skills = Some(skills);
+    }
     let ctx = StageContext {
         command: crate::domain::StageCommand {
             project_id: project.id.clone(),
@@ -76,7 +82,7 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
         resolved_language: project.resolved_language,
         architecture_finalize,
         architecture_answers,
-        model_config: project.model_config.clone(),
+        model_config,
     };
 
     executor.execute(&ctx).await
@@ -446,6 +452,9 @@ pub async fn prepare_pipeline_restart(
     }
 
     if let Some(config) = model_config {
+        if let Some(skills) = &config.coding_skills {
+            skills.validate()?;
+        }
         project.model_config.merge_from(&config);
     }
 

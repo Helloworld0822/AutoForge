@@ -25,6 +25,42 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
+pub async fn get_coding_skills(
+    app: web::Data<Arc<App>>,
+    id: web::Path<Uuid>,
+) -> Result<HttpResponse> {
+    let id = id.into_inner();
+    let project = app
+        .get_project(id)
+        .await
+        .ok_or_else(|| AutoForgeError::NotFound(format!("project {id}")))?;
+    let skills = crate::services::coding_skills::load_override(app.media.base_dir(), id)
+        .await?
+        .or(project.model_config.coding_skills)
+        .unwrap_or_default();
+    Ok(HttpResponse::Ok().json(skills))
+}
+
+pub async fn set_coding_skills(
+    app: web::Data<Arc<App>>,
+    id: web::Path<Uuid>,
+    skills: web::Json<crate::services::coding_skills::CodingSkills>,
+) -> Result<HttpResponse> {
+    let id = id.into_inner();
+    app.get_project(id)
+        .await
+        .ok_or_else(|| AutoForgeError::NotFound(format!("project {id}")))?;
+    skills.validate()?;
+    crate::services::artifacts::save_json(
+        app.media.base_dir(),
+        &format!("projects/{id}/coding-skills.json"),
+        &skills.into_inner(),
+    )
+    .await?;
+    Ok(HttpResponse::Ok()
+        .json(serde_json::json!({"message": "다음 코드 작성 단계부터 적용됩니다."})))
+}
+
 /// Liveness — 프로세스 생존 확인 (의존성 프로브 없음)
 pub async fn health(app: web::Data<Arc<App>>) -> HttpResponse {
     let mut report = HealthReport::liveness();
@@ -178,6 +214,9 @@ pub async fn create_project(
         }
     }
 
+    if let Some(skills) = &model_config.coding_skills {
+        skills.validate()?;
+    }
     let pdf = pdf_bytes
         .ok_or_else(|| AutoForgeError::BadRequest("PDF file required (field: plan)".into()))?;
 

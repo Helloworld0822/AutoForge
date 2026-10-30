@@ -833,19 +833,26 @@ fn build_implement_prompt(ctx: &StageContext) -> String {
          Stitch HTML 또는 Figma PNG/export JSON이 포함될 수 있습니다.\n\
          {lang_note}\
          {devops_note}\
+         {}\
          입력: {:?}",
+        ctx.model_config
+            .coding_skills
+            .as_ref()
+            .map(|s| s.prompt_note())
+            .unwrap_or_default(),
         inputs.iter().map(|a| &a.uri).collect::<Vec<_>>()
     )
 }
 
 fn build_verify_prompt(ctx: &StageContext) -> String {
     format!(
-        "구현된 코드베이스에 대해 전체 검증을 수행하세요.\n\
+        "{}구현된 코드베이스에 대해 전체 검증을 수행하세요.\n\
          실행할 검증:\n{}\n\
          모든 테스트·린트·빌드가 통과하면 passed: true.\n\
          strict JSON verify_report 출력: {{ passed, checks: [{{name, passed, output}}], errors: [], summary }}\n\
          PR: {:?}\n\
          이전 산출물: {:?}",
+        ctx.model_config.coding_skills.as_ref().map(|s| s.prompt_note()).unwrap_or_default(),
         VERIFY_CHECKS.join("\n"),
         ctx.pr_url,
         ctx.input.iter().map(|a| &a.name).collect::<Vec<_>>()
@@ -854,20 +861,21 @@ fn build_verify_prompt(ctx: &StageContext) -> String {
 
 fn build_debug_prompt(ctx: &StageContext, verify_meta: &serde_json::Value) -> String {
     format!(
-        "verify_report.json의 실패 항목을 분석하고 자동으로 디버깅·수정하세요.\n\
+        "{}verify_report.json의 실패 항목을 분석하고 자동으로 디버깅·수정하세요.\n\
          1. 실패한 테스트/린트 오류의 근본 원인 파악\n\
          2. 최소 변경으로 수정 (regression 방지)\n\
          3. 수정 후 cargo test / clippy 재실행\n\
          4. strict JSON debug_report 출력: {{ fixes_applied: [], files_changed: [], summary, resolved_errors }}\n\
          Verify 결과: {verify_meta}\n\
          PR: {:?}",
+        ctx.model_config.coding_skills.as_ref().map(|s| s.prompt_note()).unwrap_or_default(),
         ctx.pr_url
     )
 }
 
 fn build_security_prompt(ctx: &StageContext) -> String {
     format!(
-        "코드베이스 보안 감사 및 자동 패치를 수행하세요.\n\
+        "{}코드베이스 보안 감사 및 자동 패치를 수행하세요.\n\
          검사 항목:\n{}\n\
          1. 취약한 의존성 업데이트 (cargo audit, npm audit)\n\
          2. OWASP Top 10 코드 취약점 수정 (SQLi, XSS, 인증/인가)\n\
@@ -875,6 +883,7 @@ fn build_security_prompt(ctx: &StageContext) -> String {
          4. 패치 후 테스트 재실행\n\
          strict JSON security_report 출력: {{ passed, vulnerabilities_found, patches_applied: [{{id, severity, package, action}}], audit_tools: [], summary }}\n\
          PR: {:?}",
+        ctx.model_config.coding_skills.as_ref().map(|s| s.prompt_note()).unwrap_or_default(),
         SECURITY_CHECKS.join("\n"),
         ctx.pr_url
     )

@@ -5,6 +5,7 @@ import { PipelineActivityPanel } from '../components/PipelineActivityPanel';
 import { PipelineRestartPanel } from '../components/PipelineRestartPanel';
 import { PipelineStages } from '../components/PipelineStages';
 import { DailyLogPanel } from '../components/DailyLogPanel';
+import { ProjectCodingSkills } from '../components/CodingSkillsPanel';
 import { cancelProject } from '../api/client';
 import {
   ArrowLeft,
@@ -186,6 +187,7 @@ export function ProjectDetailPage() {
       </section>
 
       <DailyLogPanel projectId={project.id} />
+      <ProjectCodingSkills key={project.id} projectId={project.id} />
       <Link className="workspace-button mb-5 inline-flex" to={`/estimates?title=${encodeURIComponent(name)}`}>이 프로젝트 견적 작성</Link>
 
       <section className="mb-5 rounded-lg border border-border bg-card p-5 md:p-6">

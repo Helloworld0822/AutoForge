@@ -145,6 +145,7 @@ export interface HealthResponse {
 }
 
 export interface PipelineModelConfig {
+  coding_skills?: CodingSkills;
   summarize?: string;
   architect?: string;
   implement?: string;
@@ -154,6 +155,13 @@ export interface PipelineModelConfig {
   design_device_type?: string;
   design_source?: 'stitch' | 'figma';
   figma_file_url?: string;
+}
+
+export type CodingSkill = 'targeted_read' | 'minimal_diff' | 'concise_output';
+
+export interface CodingSkills {
+  readonly enabled: readonly CodingSkill[];
+  readonly custom_markdown: string;
 }
 
 export interface EstimateItem {

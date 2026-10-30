@@ -136,6 +136,8 @@ impl ModelProfile {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PipelineModelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coding_skills: Option<crate::services::coding_skills::CodingSkills>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summarize: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub architect: Option<String>,
@@ -205,6 +207,7 @@ impl PipelineModelConfig {
 
     pub fn defaults_view() -> Self {
         Self {
+            coding_skills: None,
             summarize: Some(ModelProfile::summarize().model_id),
             architect: Some(ModelProfile::architect().model_id),
             implement: Some(ModelProfile::implement().model_id),
@@ -219,6 +222,9 @@ impl PipelineModelConfig {
 
     /// `other`의 Some 필드만 현재 설정에 병합한다.
     pub fn merge_from(&mut self, other: &Self) {
+        if other.coding_skills.is_some() {
+            self.coding_skills = other.coding_skills.clone();
+        }
         if other.summarize.is_some() {
             self.summarize = other.summarize.clone();
         }

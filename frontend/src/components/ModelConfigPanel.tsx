@@ -3,7 +3,7 @@ import { listModels } from '../api/client';
 import type { CursorModel, PipelineModelConfig, StageId } from '../types';
 
 const STAGE_FIELDS: {
-  key: keyof PipelineModelConfig;
+  key: Exclude<keyof PipelineModelConfig, 'coding_skills'>;
   stage: StageId;
   label: string;
   description: string;
@@ -74,7 +74,7 @@ export function ModelConfigPanel({ value, onChange, defaultExpanded = false }: M
       .finally(() => setLoading(false));
   }, [expanded, models.length]);
 
-  const setField = (key: keyof PipelineModelConfig, modelId: string) => {
+  const setField = (key: Exclude<keyof PipelineModelConfig, 'coding_skills'>, modelId: string) => {
     onChange({
       ...value,
       [key]: modelId || undefined,
@@ -83,7 +83,7 @@ export function ModelConfigPanel({ value, onChange, defaultExpanded = false }: M
 
   const resetDefaults = () => onChange({});
 
-  const resolved = (key: keyof PipelineModelConfig) =>
+  const resolved = (key: Exclude<keyof PipelineModelConfig, 'coding_skills'>) =>
     value[key] ?? defaults[key] ?? '';
 
   return (

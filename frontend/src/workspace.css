@@ -15,10 +15,13 @@
 .workspace-primary { background: var(--color-accent); color: var(--color-bg); font-weight: 600; }
 .workspace-primary:hover { background: var(--color-primary); }
 .workspace-button:disabled, fieldset:disabled .workspace-button { opacity: .5; cursor: wait; }
-.workspace-input:focus-visible, .workspace-button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
+.workspace-input:focus-visible, .workspace-button:focus-visible, .skill-fields input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
 .estimate-item { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); }
 .estimate-item > div:last-child { grid-column: 1 / -1; }
 .estimate-print { display: none; }
+.skill-fields { max-width: 100%; overflow-wrap: anywhere; }
+.skill-fields input[type="file"] { width: 100%; min-width: 0; }
+.skill-fields legend { max-width: 100%; }
 @media (max-width: 640px) {
   .estimate-item { grid-template-columns: 1fr; }
   .estimate-page { overflow-wrap: anywhere; }

@@ -2,7 +2,8 @@ import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createProject, PROGRAMMING_LANGUAGES } from '../api/client';
 import { ModelConfigPanel } from '../components/ModelConfigPanel';
-import type { LanguageMode, PipelineModelConfig, ProgrammingLanguage } from '../types';
+import { CodingSkillsPanel } from '../components/CodingSkillsPanel';
+import type { CodingSkills, LanguageMode, PipelineModelConfig, ProgrammingLanguage } from '../types';
 
 const DEVOPS_ACCEPT =
   '.md,.markdown,.yaml,.yml,.txt,.pdf,application/pdf,text/markdown,text/plain';
@@ -41,6 +42,9 @@ export function NewProjectPage() {
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [modelConfig, setModelConfig] = useState<PipelineModelConfig>({});
+  const [codingSkills, setCodingSkills] = useState<CodingSkills>({
+    enabled: ['targeted_read', 'minimal_diff', 'concise_output'], custom_markdown: '',
+  });
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -69,7 +73,7 @@ export function NewProjectPage() {
         languageMode,
         programmingLanguage:
           languageMode === 'manual' ? programmingLanguage : undefined,
-        modelConfig,
+        modelConfig: { ...modelConfig, coding_skills: codingSkills },
       });
       navigate(`/projects/${res.id}`);
     } catch (err) {
@@ -106,6 +110,7 @@ export function NewProjectPage() {
           onSubmit={onSubmit}
         >
           <SectionTitle icon="description" title="외주 계획서 (PDF) — 필수" />
+          <CodingSkillsPanel value={codingSkills} onChange={setCodingSkills} />
           <div
             className={dropzoneClass(dragOver, !!file)}
             onDragOver={(e) => {

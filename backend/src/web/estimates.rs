@@ -252,4 +252,58 @@ mod tests {
             .await
             .unwrap();
     }
+
+    #[actix_web::test]
+    async fn updates_skills_without_overwriting_pipeline_state() {
+        let app = app().await;
+        let project = app
+            .create_project(
+                Some("코딩 스킬".into()),
+                None,
+                None,
+                crate::domain::LanguageMode::Auto,
+                Default::default(),
+            )
+            .await;
+        app.store.save(&project).await.unwrap();
+        let api = test::init_service(
+            WebApp::new()
+                .app_data(web::Data::new(app.clone()))
+                .configure(crate::web::configure),
+        )
+        .await;
+        let uri = format!("/v1/projects/{}/skills", project.id.0);
+        let req = test::TestRequest::put()
+            .uri(&uri)
+            .insert_header(("Authorization", "Bearer test-key"))
+            .set_json(
+                serde_json::json!({"enabled":["minimal_diff"], "custom_markdown":"# Local skill"}),
+            )
+            .to_request();
+        assert_eq!(test::call_service(&api, req).await.status(), StatusCode::OK);
+        app.store.save(&project).await.unwrap();
+        let req = test::TestRequest::get()
+            .uri(&uri)
+            .insert_header(("Authorization", "Bearer test-key"))
+            .to_request();
+        let skills: crate::services::coding_skills::CodingSkills =
+            test::call_and_read_body_json(&api, req).await;
+        assert_eq!(
+            skills.enabled,
+            vec![crate::services::coding_skills::CodingSkill::MinimalDiff]
+        );
+        assert_eq!(skills.custom_markdown, "# Local skill");
+        let req = test::TestRequest::put()
+            .uri(&uri)
+            .insert_header(("Authorization", "Bearer test-key"))
+            .set_json(serde_json::json!({"enabled":["unknown_skill"], "custom_markdown":""}))
+            .to_request();
+        assert_eq!(
+            test::call_service(&api, req).await.status(),
+            StatusCode::BAD_REQUEST
+        );
+        tokio::fs::remove_dir_all(app.media.base_dir())
+            .await
+            .unwrap();
+    }
 }

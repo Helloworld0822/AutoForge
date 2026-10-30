@@ -31,6 +31,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                         )
                         .route("/estimates/{id}", web::get().to(estimates::get))
                         .route("/estimates/{id}", web::put().to(estimates::update))
+                        .route(
+                            "/projects/{id}/skills",
+                            web::get().to(handlers::get_coding_skills),
+                        )
+                        .route(
+                            "/projects/{id}/skills",
+                            web::put().to(handlers::set_coding_skills),
+                        )
                         .route("/projects", web::post().to(handlers::create_project))
                         .route("/projects", web::get().to(handlers::list_projects))
                         .route("/projects/ws", web::get().to(ws::projects_websocket))

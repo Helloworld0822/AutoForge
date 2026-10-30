@@ -1,4 +1,5 @@
 import type {
+  CodingSkills,
   Estimate,
   EstimateInput,
   EstimateGenerationResult,
@@ -40,6 +41,16 @@ export function generateEstimate(input: { requirements: string; daily_rate: numb
 
 export function getEstimateGeneration(id: string): Promise<EstimateGenerationResult> {
   return request(`/v1/estimates/generations/${id}`);
+}
+
+export function getCodingSkills(id: string): Promise<CodingSkills> {
+  return request(`/v1/projects/${id}/skills`);
+}
+
+export function saveCodingSkills(id: string, skills: CodingSkills): Promise<void> {
+  return request(`/v1/projects/${id}/skills`, {
+    method: 'PUT', body: JSON.stringify(skills), headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 function authHeaders(existing?: HeadersInit): HeadersInit {
