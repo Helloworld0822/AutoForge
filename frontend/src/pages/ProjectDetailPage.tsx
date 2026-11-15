@@ -101,7 +101,7 @@ export function ProjectDetailPage() {
               {stateLabel[project.state] ?? project.state}
             </span>
             {project.has_devops_plan && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-violet-400/40 bg-bg px-2.5 py-0.5 text-xs font-medium text-violet-400">
+              <span className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-bg px-2.5 py-0.5 text-xs font-medium text-accent">
                 <Server size={12} /> DevOps
               </span>
             )}
@@ -135,7 +135,7 @@ export function ProjectDetailPage() {
           </div>
           <div className="h-2.5 overflow-hidden rounded-full bg-bg">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-accent to-violet-500 transition-[width] duration-400"
+              className="h-full rounded-full bg-accent transition-[width] duration-200"
               style={{ width: `${project.progress_percent}%` }}
             />
           </div>

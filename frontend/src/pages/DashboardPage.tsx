@@ -35,7 +35,7 @@ export function DashboardPage() {
           </button>
           <Link
             to="/new"
-            className="flex items-center gap-2 rounded-lg bg-accent px-6 py-2 font-bold text-[#002a65] shadow-lg shadow-accent/20 transition-all hover:opacity-90 active:scale-95"
+            className="flex items-center gap-2 rounded-lg bg-accent px-6 py-2 font-bold text-[#002a65] transition-colors duration-150 hover:bg-primary"
           >
             <span className="material-symbols-outlined text-xl">add</span>
             <span className="font-label text-xs tracking-wide">새 프로젝트</span>
@@ -50,8 +50,6 @@ export function DashboardPage() {
             value={projects.length}
             icon="folder"
             iconHover="group-hover:bg-accent group-hover:text-[#002d6c]"
-            subtext="+0% from last month"
-            subtextClass="text-secondary"
           />
           <StatCard
             label="실행 중"
@@ -59,7 +57,6 @@ export function DashboardPage() {
             icon="sync"
             iconClass="text-secondary group-hover:bg-secondary group-hover:text-[#003824]"
             valueClass="text-primary"
-            subtext="Active pipelines"
           />
           <StatCard
             label="완료"
@@ -67,7 +64,6 @@ export function DashboardPage() {
             icon="check_circle"
             iconClass="text-tertiary group-hover:bg-tertiary group-hover:text-[#472a00]"
             valueClass="text-secondary"
-            subtext="Successfully merged"
           />
         </section>
 
@@ -111,7 +107,7 @@ export function DashboardPage() {
                 </p>
                 <Link
                   to="/new"
-                  className="group inline-flex items-center gap-4 rounded-xl bg-accent px-8 py-4 font-bold text-[#002a65] shadow-xl shadow-accent/30 transition-all hover:-translate-y-0.5 hover:shadow-accent/40"
+                  className="group inline-flex items-center gap-4 rounded-xl bg-accent px-8 py-4 font-bold text-[#002a65] transition-colors duration-150 hover:bg-primary"
                 >
                   <span className="font-label text-xs tracking-wide">첫 프로젝트 시작하기</span>
                   <span className="material-symbols-outlined transition-transform group-hover:translate-x-1">
@@ -148,7 +144,7 @@ export function DashboardPage() {
             icon="bolt"
             iconClass="bg-tertiary/10 text-tertiary"
             title="시스템 상태"
-            description="현재 모든 서비스가 정상적으로 작동 중입니다."
+            description="API, GitHub, 메시지 큐 연결 상태를 확인합니다."
           />
         </section>
       </div>
@@ -163,8 +159,6 @@ function StatCard({
   iconClass = 'text-primary group-hover:bg-accent group-hover:text-[#002d6c]',
   iconHover,
   valueClass = 'text-foreground',
-  subtext,
-  subtextClass = 'text-muted opacity-60',
 }: {
   label: string;
   value: number;
@@ -172,13 +166,11 @@ function StatCard({
   iconClass?: string;
   iconHover?: string;
   valueClass?: string;
-  subtext: string;
-  subtextClass?: string;
 }) {
   return (
-    <div className="group flex flex-col gap-2 rounded-xl border border-border bg-surface-container-low p-6 transition-colors hover:border-accent/50">
+    <div className="group flex flex-col gap-2 rounded-xl border border-border bg-surface-container-low p-6 transition-colors duration-150 hover:border-accent/50">
       <div className="flex items-start justify-between">
-        <span className="font-label text-xs uppercase tracking-wider text-muted">{label}</span>
+        <span className="text-xs text-muted">{label}</span>
         <div
           className={`flex size-8 items-center justify-center rounded-lg bg-surface-variant transition-colors ${iconClass} ${iconHover ?? ''}`}
         >
@@ -187,7 +179,6 @@ function StatCard({
       </div>
       <div className="flex items-baseline gap-2">
         <span className={`font-headline text-[2rem] font-bold ${valueClass}`}>{value}</span>
-        <span className={`font-label text-xs ${subtextClass}`}>{subtext}</span>
       </div>
     </div>
   );

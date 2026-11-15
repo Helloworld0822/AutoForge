@@ -23,7 +23,7 @@ export function ProjectCard({ project }: { project: Project }) {
   return (
     <Link
       to={`/projects/${project.id}`}
-      className="group block rounded-xl border border-border bg-bg-elevated p-5 transition-all hover:border-accent/50 hover:shadow-lg hover:shadow-accent/5"
+      className="group block rounded-xl border border-border bg-bg-elevated p-5 transition-colors duration-150 hover:border-accent/50"
     >
       <div className="mb-3 flex items-start justify-between">
         <div>
@@ -43,7 +43,7 @@ export function ProjectCard({ project }: { project: Project }) {
 
       <div className="h-1.5 overflow-hidden rounded-full bg-surface-container-lowest">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-accent to-secondary transition-[width] duration-400"
+          className="h-full rounded-full bg-accent transition-[width] duration-200"
           style={{ width: `${project.progress_percent}%` }}
         />
       </div>

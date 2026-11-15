@@ -61,7 +61,7 @@ flowchart TD
 ## 영향 받지 않는 기능
 
 - REST API, 대시보드, 이미지 호스팅
-- Summarize / Architect / Ingest 등 **Design 이전** 단계 (단, `CURSOR_API_KEY`는 별도 필요)
+- Summarize / Architect / Ingest 등 **Design 이전** 단계 (단, `OMNIROUTE_API_KEY`는 별도 필요)
 - `/health` liveness
 
 ## 토큰 발급 및 자동 갱신

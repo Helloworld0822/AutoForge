@@ -288,7 +288,7 @@ export function NewProjectPage() {
 
           <button
             type="submit"
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-3.5 font-bold text-[#002a65] shadow-lg shadow-accent/20 transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-3.5 font-bold text-[#002a65] transition-colors duration-150 enabled:hover:bg-primary disabled:cursor-not-allowed disabled:opacity-50"
             disabled={loading}
           >
             {loading ? (

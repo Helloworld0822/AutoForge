@@ -53,9 +53,6 @@ export function Layout() {
             </div>
             <div className="flex flex-col">
               <h1 className="font-headline text-xl font-bold leading-tight">AutoForge</h1>
-              <span className="font-label text-xs uppercase tracking-widest text-muted opacity-60">
-                AI Automation Platform
-              </span>
             </div>
           </div>
 
@@ -66,7 +63,7 @@ export function Layout() {
                 <Link
                   key={to}
                   to={to}
-                  className={`flex items-center gap-4 px-4 py-2 transition-all ${
+                  className={`flex items-center gap-4 px-4 py-2 transition-colors duration-150 ${
                     active
                       ? 'border-l-4 border-primary bg-surface-variant text-primary'
                       : 'text-muted hover:bg-surface-variant'
@@ -87,10 +84,7 @@ export function Layout() {
         <div className="flex flex-col gap-1 border-t border-border/30 pt-6">
           {user?.session_login_enabled && user.authenticated && (
             <div className="mb-2 flex items-center justify-between rounded-lg px-4 py-2">
-              <div className="flex flex-col gap-0.5">
-                <span className="font-label text-[10px] uppercase tracking-widest text-muted opacity-60">
-                  로그인
-                </span>
+              <div>
                 <span className="text-sm font-semibold text-foreground">{user.username}</span>
               </div>
               <button

@@ -39,7 +39,7 @@ export function LoginPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg px-4">
-      <div className="w-full max-w-md rounded-2xl border border-border bg-bg-elevated p-8 shadow-2xl">
+      <div className="w-full max-w-md rounded-2xl border border-border bg-bg-elevated p-8">
         <div className="mb-8 flex flex-col items-center gap-3 text-center">
           <div className="flex size-14 items-center justify-center rounded-2xl bg-accent text-[#002a65] shadow-lg shadow-accent/20">
             <span className="material-symbols-outlined material-symbols-filled text-3xl">
@@ -52,7 +52,7 @@ export function LoginPage() {
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <label className="flex flex-col gap-2">
-            <span className="font-label text-xs uppercase tracking-widest text-muted">아이디</span>
+            <span className="text-sm text-muted">아이디</span>
             <input
               type="text"
               autoComplete="username"
@@ -64,7 +64,7 @@ export function LoginPage() {
           </label>
 
           <label className="flex flex-col gap-2">
-            <span className="font-label text-xs uppercase tracking-widest text-muted">비밀번호</span>
+            <span className="text-sm text-muted">비밀번호</span>
             <input
               type="password"
               autoComplete="current-password"
