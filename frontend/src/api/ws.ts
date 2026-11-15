@@ -42,29 +42,42 @@ function connectWebSocket(
   let ws: WebSocket | null = null;
   let closed = false;
   let retryMs = 1000;
+  let retryTimer: number | undefined;
+
+  const detach = (socket: WebSocket) => {
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null;
+  };
 
   const connect = () => {
     if (closed) return;
-    ws = new WebSocket(buildWebSocketUrl(path));
+    retryTimer = undefined;
+    const socket = new WebSocket(buildWebSocketUrl(path));
+    ws = socket;
 
-    ws.onopen = () => {
+    socket.onopen = () => {
       retryMs = 1000;
     };
 
-    ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (closed || ws !== socket) return;
       const msg = parseMessage(String(event.data));
       if (msg) onMessage(msg);
     };
 
-    ws.onerror = () => {
-      ws?.close();
+    socket.onerror = () => {
+      socket.close();
     };
 
-    ws.onclose = () => {
-      onDisconnect?.();
+    socket.onclose = () => {
+      detach(socket);
+      ws = null;
       if (closed) return;
-      window.setTimeout(connect, retryMs);
+      retryTimer = window.setTimeout(connect, retryMs);
       retryMs = Math.min(retryMs * 2, 15000);
+      onDisconnect?.();
     };
   };
 
@@ -72,7 +85,12 @@ function connectWebSocket(
 
   return () => {
     closed = true;
-    ws?.close();
+    window.clearTimeout(retryTimer);
+    if (ws) {
+      detach(ws);
+      ws.close();
+      ws = null;
+    }
   };
 }
 

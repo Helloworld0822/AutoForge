@@ -1,0 +1,33 @@
+# docker compose --env-file ~/.config/autoforge/deployment.env \
+#   -f compose.yml -f compose.private.yml up -d --build
+services:
+  nginx:
+    ports: !override
+      - "127.0.0.1:18090:80"
+  api:
+    environment: &private-env
+      LOGIN_USERNAME: ${LOGIN_USERNAME:?Set LOGIN_USERNAME}
+      LOGIN_PASSWORD: ${LOGIN_PASSWORD:?Set LOGIN_PASSWORD}
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET}
+      PUBLIC_URL: https://autoforge.helloworld0822.site
+      OMNIROUTE_CODEX_BASE_URL: ${OMNIROUTE_BASE_URL:-http://172.21.0.1:20129/v1}
+      CORS_ALLOWED_ORIGINS: https://autoforge.helloworld0822.site
+      GITHUB_AUTO_MERGE: "false"
+      GIT_AUTO_COMMIT: "false"
+  orchestrator:
+    environment: *private-env
+    restart: unless-stopped
+  worker:
+    environment: *private-env
+    restart: unless-stopped
+  redis:
+    command: ["redis-server", "--appendonly", "yes"]
+  rabbitmq:
+    environment:
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD}
+    volumes: !override
+      - rabbitmq-data:/var/lib/rabbitmq
+    restart: unless-stopped
+
+volumes:
+  rabbitmq-data:

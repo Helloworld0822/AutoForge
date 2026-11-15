@@ -9,7 +9,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/health", web::get().to(handlers::health))
         .route("/ready", web::get().to(handlers::ready))
         .route("/health/ready", web::get().to(handlers::ready))
-        .route("/media/{filename}", web::get().to(handlers::serve_media))
+        .service(
+            web::resource("/media/{filename}")
+                .wrap(from_fn(require_auth))
+                .route(web::get().to(handlers::serve_media)),
+        )
         .service(
             web::scope("/v1")
                 .route("/auth/login", web::post().to(login))

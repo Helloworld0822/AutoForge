@@ -156,13 +156,13 @@ export interface PipelineModelConfig {
   figma_file_url?: string;
 }
 
-export interface CursorModel {
+export interface OmniRouteModel {
   id: string;
   name?: string | null;
 }
 
 export interface ModelsListResponse {
-  models: CursorModel[];
+  models: OmniRouteModel[];
   defaults: PipelineModelConfig;
 }
 

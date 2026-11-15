@@ -293,13 +293,13 @@ pub async fn submit_architecture_answers(
 }
 
 pub async fn list_models(app: web::Data<Arc<App>>) -> Result<HttpResponse> {
-    use crate::clients::cursor::CursorClient;
+    use crate::clients::omniroute::OmniRouteClient;
 
     let models = app
-        .cursor
+        .omniroute
         .list_models()
         .await
-        .unwrap_or_else(|_| CursorClient::fallback_models());
+        .unwrap_or_else(|_| OmniRouteClient::fallback_models());
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "models": models,
@@ -551,6 +551,6 @@ pub async fn serve_media(
 
     Ok(HttpResponse::Ok()
         .content_type(content_type)
-        .insert_header((header::CACHE_CONTROL, "public, max-age=31536000, immutable"))
+        .insert_header((header::CACHE_CONTROL, "private, no-store"))
         .body(bytes))
 }

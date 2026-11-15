@@ -40,7 +40,7 @@ nginx/Containerfile
 
 ```bash
 cp .env.example .env
-# .env 편집 (CURSOR_API_KEY, GITHUB_TOKEN 등)
+# .env 편집 (OMNIROUTE_API_KEY, GITHUB_TOKEN 등)
 
 # Docker
 ./scripts/compose-up.sh
@@ -70,9 +70,29 @@ cd frontend && npm install && npm run dev
 # http://localhost:5173
 ```
 
+## 테스트 및 검증
+
+프런트엔드 테스트는 Node.js 22.22.2 이상의 22.x 환경을 사용합니다.
+
+```bash
+# backend 디렉터리에서
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+
+# frontend 디렉터리에서
+npm ci
+npm run lint
+npm test
+npm run build
+```
+
+위 검사는 외부 AI API 호출 없이 실행합니다. 전체 Redis/RabbitMQ 연동과
+컨테이너 실행 검증은 CI의 Compose smoke test에서 별도로 수행합니다.
+
 ## GitHub 자동화
 
-`GITHUB_TOKEN` 설정 시 프라이빗 레포 자동 생성 → Cursor PR 생성 → SecurityPatch 통과 후 자동 merge.
+`GITHUB_TOKEN` 설정 시 프라이빗 레포 자동 생성 → OmniRoute Codex 작업/PR 생성 → SecurityPatch 통과 후 자동 merge.
 
 ```bash
 export GITHUB_TOKEN=ghp_xxxx
@@ -85,7 +105,7 @@ export GITHUB_AUTO_MERGE=true   # 기본값
 | Method | Path | 설명 | 인증 |
 |--------|------|------|------|
 | GET | `/health` | Liveness (프로세스 생존) | ❌ |
-| GET | `/ready` | Readiness (스토어/Redis/Cursor/Stitch 프로브) | ❌ |
+| GET | `/ready` | Readiness (스토어/Redis/OmniRoute/Stitch 프로브) | ❌ |
 | POST | `/v1/projects` | PDF 업로드 + DevOps 계획서(선택) + 파이프라인 시작 | ✅ |
 | GET | `/v1/projects` | 프로젝트 목록 | ✅ |
 | GET | `/v1/projects/{id}` | 프로젝트 상세 | ✅ |
@@ -95,13 +115,14 @@ export GITHUB_AUTO_MERGE=true   # 기본값
 | GET | `/v1/projects/{id}/daily-logs/{date}` | 특정 날짜 MD 로그 | ✅ |
 | POST | `/v1/images` | 이미지 업로드 (필드명: `image`) → 호스팅 URL 반환 | ✅ |
 | GET | `/v1/images` | 업로드된 이미지 목록 (최신순) | ✅ |
-| GET | `/media/{filename}` | 업로드된 이미지 직접 서빙 (공유/임베드용) | ❌ |
+| GET | `/media/{filename}` | 업로드된 이미지 직접 서빙 | ✅ |
 
 Compose 환경에서는 nginx가 `/v1`, `/health`, `/ready`, `/media`를 `api:8080`으로 프록시합니다.
 
 `API_KEY` 환경변수를 설정하면 `/v1/*`는 `Authorization: Bearer <API_KEY>` 헤더가 필요합니다.
 미설정 시 인증 없이 열려있으므로(로컬 개발 편의) **운영 환경에서는 반드시 설정하세요.**
-`/media/{filename}`은 외부 공유·임베드를 위해 인증 없이 접근 가능합니다.
+`/media/{filename}`도 API와 동일한 인증을 적용하며 공유 캐시에 저장하지 않습니다.
+개인용 HTTPS 배포는 [배포 안내](docs/PRIVATE_DEPLOYMENT.md)를 참고하세요.
 
 ### 이미지 호스팅
 
@@ -135,21 +156,21 @@ curl -X POST http://localhost/v1/images \
 전체 목록은 [.env.example](.env.example) 참고. 주요 카테고리:
 
 - **서버**: `HOST`, `PORT`, `RUST_LOG`
-- **AI API 키**: `CURSOR_API_KEY`, `STITCH_API_KEY`, Stitch Bearer (`STITCH_ACCESS_TOKEN` 또는 ADC/gcloud 자동 갱신 — [상세](docs/STITCH_ACCESS_TOKEN.md))
+- **AI API 키**: `OMNIROUTE_API_KEY`, `OMNIROUTE_BASE_URL`, `STITCH_API_KEY`, Stitch Bearer (`STITCH_ACCESS_TOKEN` 또는 ADC/gcloud 자동 갱신 — [상세](docs/STITCH_ACCESS_TOKEN.md))
 - **GitHub 자동화**: `GITHUB_TOKEN`, `GITHUB_ORG`, `GITHUB_AUTO_MERGE`
 - **보안**: `API_KEY`, `CORS_ALLOWED_ORIGINS`, `MAX_UPLOAD_BYTES` — 운영 배포 전 반드시 확인
 - **아티팩트/이미지 저장소 (로컬 디스크)**: `ARTIFACTS_DIR`, `MAX_IMAGE_BYTES`
 - **RabbitMQ (분산 모드)**: `MESSAGE_QUEUE_ENABLED`, `RABBITMQ_URL` 등 — 기본값은 단일 프로세스(false). Redis는 프로젝트 스토어/알림용
 - **Slack 알림**: `SLACK_WEBHOOK_URL` 또는 `SLACK_BOT_TOKEN`+`SLACK_CHANNEL`
 
-서버 기동 시 누락되거나 위험한 설정(예: `API_KEY` 미설정, `CURSOR_API_KEY` 비어있음)은
+서버 기동 시 누락되거나 위험한 설정(예: `API_KEY` 미설정, `OMNIROUTE_API_KEY` 비어있음)은
 로그에 경고로 출력됩니다.
 
 ## 운영 환경 체크리스트
 
 실사용(프로덕션) 배포 전 최소한 아래 항목을 확인하세요.
 
-- [ ] `CURSOR_API_KEY`, `STITCH_API_KEY`, `STITCH_ACCESS_TOKEN` 설정 — Design 단계에 Stitch Bearer 토큰 필수 ([docs/STITCH_ACCESS_TOKEN.md](docs/STITCH_ACCESS_TOKEN.md))
+- [ ] `OMNIROUTE_API_KEY`, `OMNIROUTE_BASE_URL`, `STITCH_API_KEY`, `STITCH_ACCESS_TOKEN` 설정 — Design 단계에 Stitch Bearer 토큰 필수 ([docs/STITCH_ACCESS_TOKEN.md](docs/STITCH_ACCESS_TOKEN.md))
 - [ ] `API_KEY` 설정 — 미설정 시 REST API가 인증 없이 공개됨
 - [ ] `CORS_ALLOWED_ORIGINS`를 실제 프론트엔드 도메인으로 제한
 - [ ] `ARTIFACTS_DIR`가 영속 볼륨(디스크)을 가리키는지 확인 — Compose 환경에서는
