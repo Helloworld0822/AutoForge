@@ -70,6 +70,16 @@ cd frontend && npm install && npm run dev
 # http://localhost:5173
 ```
 
+## 백엔드 아키텍처 HCL
+
+프로젝트를 생성하면 Architect 단계가 계획서 요약, 부하 조건, 설계 질의응답을 바탕으로 `spec.md`와 `backend.hcl`을 생성합니다. 프로젝트 상세의 **GitHub & 산출물 → 백엔드 설계 HCL 다운로드**에서 설계 파일을 받을 수 있습니다.
+
+`backend.hcl`은 클라우드 공급자와 독립적인 HCL 설계 문서입니다. 컴포넌트 간 의존성, 초기 용량의 근거, 주요 조회별 인덱스 및 검증 방법을 담습니다. 설계 모델은 내장된 [Discord](https://discord.com/blog/how-discord-stores-trillions-of-messages), [Slack](https://slack.engineering/executing-cron-scripts-reliably-at-scale/), [Plausible](https://plausible.io/blog/open-source-saas) 사례에서 둘 이상을 비교합니다. 파일에는 선택한 원문 URL, 공개 당시 규모, 기법별 채택·보류 이유와 재검토 기준이 기록됩니다. 구현 단계는 이 파일과 명세 본문을 함께 읽습니다.
+
+현재 Compose 서비스 구성과 인덱스의 설계 예시는 [AutoForge 백엔드 HCL](docs/backend.hcl)에서 확인할 수 있습니다.
+
+Redis 모드에서는 프로젝트 키를 집합 인덱스에 등록하고 목록을 128건씩 읽습니다. 기존 키는 프로세스 시작 시 인덱스에 합칩니다. 구버전과 혼합 배포하는 경우 마지막 구버전 쓰기 프로세스가 종료된 뒤 새 버전 프로세스를 한 번 시작하면 혼합 배포 중 추가된 키도 반영됩니다.
+
 ## GitHub 자동화
 
 `GITHUB_TOKEN` 설정 시 프라이빗 레포 자동 생성 → Cursor PR 생성 → SecurityPatch 통과 후 자동 merge.
@@ -119,6 +129,7 @@ Markdown에 연결된 스크립트·외부 스킬을 설치하지 않으며 실�
 | POST | `/v1/projects` | PDF 업로드 + DevOps 계획서(선택) + 파이프라인 시작 | ✅ |
 | GET | `/v1/projects` | 프로젝트 목록 | ✅ |
 | GET | `/v1/projects/{id}` | 프로젝트 상세 | ✅ |
+| GET | `/v1/projects/{id}/backend.hcl` | 확정된 백엔드 설계 다운로드 | ✅ |
 | GET | `/v1/projects/{id}/stream` | SSE 진행률 | ✅ |
 | POST | `/v1/projects/{id}/cancel` | 파이프라인 취소 | ✅ |
 | GET | `/v1/projects/{id}/daily-logs` | 일별 경과 목록 | ✅ |

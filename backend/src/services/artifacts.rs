@@ -158,6 +158,12 @@ impl ArtifactStore for LocalArtifactStore {
     }
 
     fn uri_for(&self, key: &str) -> String {
+        if let Some(id) = key
+            .strip_prefix("projects/")
+            .and_then(|suffix| suffix.strip_suffix("/architect/backend.hcl"))
+        {
+            return format!("{}/v1/projects/{id}/backend.hcl", self.public_url);
+        }
         if let Some(filename) = key.strip_prefix(&format!("{MEDIA_DIR}/")) {
             format!("{}/media/{filename}", self.public_url)
         } else {

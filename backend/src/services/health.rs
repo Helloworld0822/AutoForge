@@ -74,7 +74,7 @@ pub async fn readiness(app: &App) -> HealthReport {
     let mut checks = BTreeMap::new();
     let mut unhealthy = false;
 
-    let store_ok = app.store.list().await.is_ok();
+    let store_ok = app.store.get(uuid::Uuid::nil()).await.is_ok();
     checks.insert(
         "store".to_string(),
         CheckResult {

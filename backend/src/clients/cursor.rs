@@ -11,6 +11,7 @@ const CURSOR_API_BASE: &str = "https://api.cursor.com";
 pub struct CursorClient {
     http: Client,
     api_key: String,
+    base_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,7 +156,16 @@ impl CursorClient {
         Ok(Self {
             http,
             api_key: api_key.into(),
+            base_url: CURSOR_API_BASE.into(),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_server(base_url: String) -> Self {
+        Self {
+            base_url,
+            ..Self::new("test-key").unwrap()
+        }
     }
 
     #[instrument(skip(self, prompt_text, opts), fields(model = %profile.model_id))]
@@ -193,7 +203,7 @@ impl CursorClient {
 
         let resp = self
             .http
-            .post(format!("{CURSOR_API_BASE}/v1/agents"))
+            .post(format!("{}/v1/agents", self.base_url))
             .basic_auth(&self.api_key, Some(""))
             .json(&body)
             .send()
@@ -217,7 +227,8 @@ impl CursorClient {
         let resp = self
             .http
             .get(format!(
-                "{CURSOR_API_BASE}/v1/agents/{agent_id}/runs/{run_id}"
+                "{}/v1/agents/{agent_id}/runs/{run_id}",
+                self.base_url
             ))
             .basic_auth(&self.api_key, Some(""))
             .send()
@@ -256,7 +267,7 @@ impl CursorClient {
     pub async fn health_check(&self) -> std::result::Result<(), String> {
         let resp = self
             .http
-            .get(format!("{CURSOR_API_BASE}/v1/models"))
+            .get(format!("{}/v1/models", self.base_url))
             .basic_auth(&self.api_key, Some(""))
             .timeout(Duration::from_secs(15))
             .send()
@@ -276,7 +287,7 @@ impl CursorClient {
     pub async fn list_models(&self) -> Result<Vec<CursorModelInfo>> {
         let resp = self
             .http
-            .get(format!("{CURSOR_API_BASE}/v1/models"))
+            .get(format!("{}/v1/models", self.base_url))
             .basic_auth(&self.api_key, Some(""))
             .send()
             .await

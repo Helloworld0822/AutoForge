@@ -1,5 +1,6 @@
 pub mod architecture_qa;
 pub mod artifacts;
+mod backend_design;
 pub mod coding_skills;
 pub mod daily_log;
 pub mod daily_log_notify;

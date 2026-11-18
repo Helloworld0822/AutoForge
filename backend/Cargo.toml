@@ -41,6 +41,7 @@ dashmap = "6"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 lapin = { version = "2.5", default-features = false, features = ["rustls"] }
 jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
+hcl-rs = "0.20"
 
 [profile.release]
 lto = "thin"
