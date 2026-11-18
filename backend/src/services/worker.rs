@@ -1,5 +1,5 @@
-use crate::clients::cursor::{CreateAgentOpts, CursorClient};
 use crate::clients::figma::FigmaClient;
+use crate::clients::omniroute::{CreateAgentOpts, OmniRouteClient};
 use crate::clients::stitch::StitchClient;
 use crate::domain::{
     ArtifactRef, LanguageMode, PipelineModelConfig, ProgrammingLanguage, StageCommand, StageId,
@@ -21,7 +21,7 @@ use std::sync::Arc;
 pub struct StageContext {
     pub command: StageCommand,
     pub artifacts: Arc<dyn ArtifactStore>,
-    pub cursor: Arc<CursorClient>,
+    pub omniroute: Arc<OmniRouteClient>,
     pub stitch: Arc<StitchClient>,
     pub figma: Arc<FigmaClient>,
     pub input: Vec<ArtifactRef>,
@@ -194,15 +194,15 @@ impl StageExecutor for SummarizeExecutor {
             return Err(AutoForgeError::Ingest("missing extracted plan text".into()));
         }
         let mut text = String::new();
-        let mut agent_id = String::new();
+        let mut run_id = String::new();
         for chunk in plan_chunks(&plan) {
             let prompt = format!("{instructions}\n기존 요약의 요구사항·부하 수치·제약을 유지하고 이번 본문을 통합한 전체 요약을 반환하세요.\n기존 요약\n{text}\n추가 본문\n{chunk}");
             let resp = ctx
-                .cursor
+                .omniroute
                 .create_agent(&prompt, &profile, CreateAgentOpts::default())
                 .await?;
             let run = ctx
-                .cursor
+                .omniroute
                 .wait_for_run(
                     &resp.agent.id,
                     &resp.run.id,
@@ -216,7 +216,7 @@ impl StageExecutor for SummarizeExecutor {
                     stage: StageId::Summarize,
                     message: "empty agent response".into(),
                 })?;
-            agent_id = resp.agent.id;
+            run_id = resp.run.id;
         }
 
         let resolved =
@@ -235,7 +235,7 @@ impl StageExecutor for SummarizeExecutor {
         Ok(StageOutput {
             artifacts: vec![artifact],
             metadata: serde_json::json!({
-                "cursor_agent_id": agent_id,
+                "omniroute_run_id": run_id,
                 "programming_language": resolved.as_str(),
             }),
         })
@@ -264,12 +264,12 @@ impl StageExecutor for ArchitectExecutor {
         let profile = ctx.model_config.profile_for(StageId::Architect);
 
         let resp = ctx
-            .cursor
+            .omniroute
             .create_agent(&prompt, &profile, CreateAgentOpts::default())
             .await?;
 
         let run = ctx
-            .cursor
+            .omniroute
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -313,7 +313,7 @@ impl StageExecutor for ArchitectExecutor {
             artifacts: vec![draft],
             metadata: serde_json::json!({
                 "phase": "draft",
-                "cursor_agent_id": resp.agent.id,
+                "omniroute_run_id": resp.run.id,
                 "questions": question_views,
                 "question_count": questions.len(),
             }),
@@ -475,10 +475,7 @@ impl StageExecutor for ImplementExecutor {
 
         let mut prompt = build_implement_prompt(ctx);
         if ctx.input_named("backend.hcl").is_some() {
-            let hcl = ctx.read_input("backend.hcl").await?;
-            prompt.push_str(&format!("\n아래 backend.hcl의 컴포넌트와 채택한 최적화를 구현하세요. indexes에 따라 기존 인덱스를 확인하고 필요한 마이그레이션을 작성한 뒤 대표 조회의 실행 계획과 쓰기 비용을 검증하세요. 보류한 기술은 재검토 조건을 기록하세요.\n{}", String::from_utf8_lossy(&hcl)));
-            let spec = ctx.read_input("spec.md").await?;
-            prompt.push_str(&format!("\nspec.md\n{}", String::from_utf8_lossy(&spec)));
+            prompt.push_str("\nbackend.hcl에 따라 컴포넌트와 채택한 최적화를 구현하세요. 기존 인덱스를 확인하고 필요한 마이그레이션과 대표 조회의 실행 계획을 검증하세요.");
         }
         let profile = ctx.model_config.profile_for(StageId::Implement);
 
@@ -487,11 +484,13 @@ impl StageExecutor for ImplementExecutor {
             starting_ref: Some("main"),
             auto_create_pr: Some(true),
             agent_id: None,
+            pr_url: None,
+            input_artifacts: &ctx.input,
         };
 
-        let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
+        let resp = ctx.omniroute.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
-            .cursor
+            .omniroute
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -509,7 +508,7 @@ impl StageExecutor for ImplementExecutor {
         Ok(StageOutput {
             artifacts: vec![],
             metadata: serde_json::json!({
-                "cursor_agent_id": resp.agent.id,
+                "omniroute_run_id": resp.run.id,
                 "pr_url": pr_url,
             }),
         })
@@ -532,11 +531,11 @@ impl StageExecutor for VerifyExecutor {
 
         let prompt = build_verify_prompt(ctx);
         let profile = ctx.model_config.profile_for(StageId::Verify);
-        let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
+        let opts = agent_opts(repo_url, ctx.pr_url.as_deref(), &ctx.input);
 
-        let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
+        let resp = ctx.omniroute.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
-            .cursor
+            .omniroute
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -562,7 +561,7 @@ impl StageExecutor for VerifyExecutor {
             metadata: serde_json::json!({
                 "passed": report.passed,
                 "errors": report.errors.len(),
-                "cursor_agent_id": resp.agent.id,
+                "omniroute_run_id": resp.run.id,
             }),
         })
     }
@@ -590,11 +589,11 @@ impl StageExecutor for DebugExecutor {
 
         let prompt = build_debug_prompt(ctx, &verify_meta);
         let profile = ctx.model_config.profile_for(StageId::Debug);
-        let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
+        let opts = agent_opts(repo_url, ctx.pr_url.as_deref(), &ctx.input);
 
-        let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
+        let resp = ctx.omniroute.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
-            .cursor
+            .omniroute
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -624,7 +623,7 @@ impl StageExecutor for DebugExecutor {
             artifacts: vec![artifact],
             metadata: serde_json::json!({
                 "debug_cycle": ctx.command.attempt,
-                "cursor_agent_id": resp.agent.id,
+                "omniroute_run_id": resp.run.id,
             }),
         })
     }
@@ -645,11 +644,11 @@ impl StageExecutor for SecurityPatchExecutor {
 
         let prompt = build_security_prompt(ctx);
         let profile = ctx.model_config.profile_for(StageId::SecurityPatch);
-        let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
+        let opts = agent_opts(repo_url, ctx.pr_url.as_deref(), &ctx.input);
 
-        let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
+        let resp = ctx.omniroute.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
-            .cursor
+            .omniroute
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -676,7 +675,7 @@ impl StageExecutor for SecurityPatchExecutor {
                 "passed": report.passed,
                 "vulnerabilities_found": report.vulnerabilities_found,
                 "patches_applied": report.patches_applied.len(),
-                "cursor_agent_id": resp.agent.id,
+                "omniroute_run_id": resp.run.id,
             }),
         })
     }
@@ -716,12 +715,18 @@ impl StageExecutor for DeliverExecutor {
     }
 }
 
-fn agent_opts<'a>(repo_url: &'a str, _pr_url: Option<&'a str>) -> CreateAgentOpts<'a> {
+fn agent_opts<'a>(
+    repo_url: &'a str,
+    pr_url: Option<&'a str>,
+    input_artifacts: &'a [ArtifactRef],
+) -> CreateAgentOpts<'a> {
     CreateAgentOpts {
         repo_url: Some(repo_url),
         starting_ref: Some("main"),
         auto_create_pr: Some(false),
         agent_id: None,
+        pr_url,
+        input_artifacts,
     }
 }
 
@@ -797,12 +802,12 @@ async fn run_architect_finalize(ctx: &StageContext, summary: &str) -> Result<Sta
     let profile = ctx.model_config.profile_for(StageId::Architect);
 
     let resp = ctx
-        .cursor
+        .omniroute
         .create_agent(&prompt, &profile, CreateAgentOpts::default())
         .await?;
 
     let run = ctx
-        .cursor
+        .omniroute
         .wait_for_run(
             &resp.agent.id,
             &resp.run.id,
@@ -835,7 +840,7 @@ async fn run_architect_finalize(ctx: &StageContext, summary: &str) -> Result<Sta
         metadata: serde_json::json!({
             "phase": "finalize",
             "backend_design": "backend.hcl",
-            "cursor_agent_id": resp.agent.id,
+            "omniroute_run_id": resp.run.id,
         }),
     })
 }

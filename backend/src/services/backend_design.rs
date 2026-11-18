@@ -220,7 +220,7 @@ mod tests {
 
     #[actix_web::test]
     async fn architect_publishes_downloadable_design_and_passes_it_to_implement() {
-        use crate::clients::cursor::CursorClient;
+        use crate::clients::omniroute::input_context;
         use crate::services::pipeline::engine::{apply_stage_output, execute_stage};
         use actix_web::{test, web, App as WebApp, HttpResponse, HttpServer};
         use std::sync::{Arc, Mutex};
@@ -228,21 +228,14 @@ mod tests {
         type Prompts = Arc<Mutex<Vec<String>>>;
         async fn create(body: web::Json<Value>, seen: web::Data<Prompts>) -> HttpResponse {
             let mut prompts = seen.lock().unwrap();
-            prompts.push(body["prompt"]["text"].as_str().unwrap().to_owned());
-            HttpResponse::Ok().json(json!({
-                "agent": {"id": "agent", "status": "RUNNING"},
-                "run": {"id": prompts.len().to_string(), "status": "RUNNING"}
-            }))
-        }
-        async fn result(id: web::Path<u8>) -> HttpResponse {
-            let text = match *id {
+            prompts.push(body["messages"][0]["content"].as_str().unwrap().to_owned());
+            let text = match prompts.len() {
                 1 => json!({"workload":"peak 20 RPS"}).to_string(),
                 2 => json!({"questions":[]}).to_string(),
                 3 => response().to_string(),
                 _ => "done".into(),
             };
-            HttpResponse::Ok()
-                .json(json!({"id":id.to_string(), "status":"COMPLETED", "result":text}))
+            HttpResponse::Ok().json(json!({"choices":[{"message":{"content":text}}]}))
         }
 
         let prompts = Prompts::default();
@@ -250,8 +243,7 @@ mod tests {
         let server = HttpServer::new(move || {
             WebApp::new()
                 .app_data(web::Data::new(received.clone()))
-                .route("/v1/agents", web::post().to(create))
-                .route("/v1/agents/agent/runs/{id}", web::get().to(result))
+                .route("/v1/chat/completions", web::post().to(create))
         })
         .workers(1)
         .bind(("127.0.0.1", 0))
@@ -268,8 +260,8 @@ mod tests {
             .to_string();
         config.api_key = Some("test-key".into());
         config.login_password = None;
-        let mut app = crate::App::new(config).await.unwrap();
-        app.cursor = Arc::new(CursorClient::for_test_server(base));
+        config.omniroute_base_url = format!("{base}/v1");
+        let app = crate::App::new(config).await.unwrap();
         let app = Arc::new(app);
         let mut project = app
             .create_project(
@@ -301,19 +293,19 @@ mod tests {
         let key = design.artifacts[1].key.clone();
         apply_stage_output(&mut project, StageId::Architect, design).unwrap();
         app.store.save(&project).await.unwrap();
-        execute_stage(&app, &project, StageId::Implement)
+        let context = input_context(app.media.base_dir(), &project.accumulated_artifacts)
             .await
             .unwrap();
 
         let hcl = app.artifacts.get(&key).await.unwrap();
         {
             let seen = prompts.lock().unwrap();
-            assert_eq!(seen.len(), 4);
+            assert_eq!(seen.len(), 3);
             assert!(seen[0].contains("20 requests per second"));
             assert!(seen[1].contains("peak 20 RPS") && seen[2].contains("peak 20 RPS"));
             assert!(seen[2].contains(CASES[0].source) && seen[2].contains(CASES[1].source));
-            assert!(seen[3].contains(std::str::from_utf8(&hcl).unwrap()));
-            assert!(seen[3].contains("# 명세"));
+            assert!(context.contains(std::str::from_utf8(&hcl).unwrap()));
+            assert!(context.contains("# 명세"));
         }
         let api = test::init_service(
             WebApp::new()

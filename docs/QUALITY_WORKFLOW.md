@@ -21,7 +21,7 @@ flowchart TD
 | 항목 | 내용 |
 |------|------|
 | 모델 | `gpt-5.3-codex-high` |
-| 실행 | Cursor Cloud Agent가 repo에서 직접 실행 |
+| 실행 | 컨테이너 내 Codex CLI가 OmniRoute Responses API를 사용해 저장소에서 실행 |
 | 검증 명령 | `cargo check`, `cargo test`, `cargo clippy`, `cargo fmt --check` |
 | 산출물 | `verify_report.json` |
 

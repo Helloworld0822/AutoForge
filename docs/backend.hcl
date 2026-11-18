@@ -18,7 +18,7 @@ backend = {
       depends_on = ["rabbitmq", "redis", "artifacts"]
     }
     worker = {
-      role       = "계획서를 추출하고 Cursor와 디자인 서비스에 단계별 작업을 요청한다."
+      role       = "계획서를 추출하고 OmniRoute와 디자인 서비스에 단계별 작업을 요청한다."
       capacity   = "Compose 워커당 동시 작업 4개. 증설 시 큐 대기 시간과 외부 API 한도를 함께 확인한다."
       depends_on = ["rabbitmq", "redis", "artifacts"]
     }
