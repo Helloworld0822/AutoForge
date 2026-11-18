@@ -1,5 +1,5 @@
-use crate::clients::cursor::{CreateAgentOpts, CursorClient};
 use crate::clients::figma::FigmaClient;
+use crate::clients::omniroute::{CreateAgentOpts, OmniRouteClient};
 use crate::clients::stitch::StitchClient;
 use crate::domain::{
     ArtifactRef, LanguageMode, PipelineModelConfig, ProgrammingLanguage, StageCommand, StageId,
@@ -7,7 +7,8 @@ use crate::domain::{
 use crate::error::{AutoForgeError, Result};
 use crate::services::architecture_qa::parse_clarification_questions;
 use crate::services::artifacts::ArtifactStore;
-use crate::services::ingest::{ingest_devops_plan, ingest_pdf};
+use crate::services::backend_design::{design_instructions, render_response};
+use crate::services::ingest::{ingest_devops_file, ingest_pdf};
 use crate::services::language::{language_prompt_note, resolve_effective_language};
 use crate::services::quality::{
     DebugReport, SecurityReport, VerifyReport, SECURITY_CHECKS, VERIFY_CHECKS,
@@ -20,7 +21,7 @@ use std::sync::Arc;
 pub struct StageContext {
     pub command: StageCommand,
     pub artifacts: Arc<dyn ArtifactStore>,
-    pub cursor: Arc<CursorClient>,
+    pub omniroute: Arc<OmniRouteClient>,
     pub stitch: Arc<StitchClient>,
     pub figma: Arc<FigmaClient>,
     pub input: Vec<ArtifactRef>,
@@ -33,6 +34,43 @@ pub struct StageContext {
     pub architecture_finalize: bool,
     pub architecture_answers: Vec<(String, String)>,
     pub model_config: PipelineModelConfig,
+}
+
+impl StageContext {
+    fn input_named(&self, name: &str) -> Option<&ArtifactRef> {
+        self.input.iter().rev().find(|a| a.name == name)
+    }
+
+    async fn read_input(&self, name: &str) -> Result<Bytes> {
+        let artifact = self
+            .input_named(name)
+            .ok_or_else(|| AutoForgeError::StageFailed {
+                stage: self.command.stage,
+                message: format!("missing input {name}"),
+            })?;
+        self.artifacts.get(&artifact.key).await
+    }
+}
+
+// Bound each raw-text input while keeping UTF-8 and, where possible, whole lines intact.
+fn plan_chunks(mut text: &str) -> impl Iterator<Item = &str> {
+    std::iter::from_fn(move || {
+        if text.is_empty() {
+            return None;
+        }
+        let mut end = text.len().min(64 * 1024);
+        if end < text.len() {
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            if let Some(newline) = text[..end].rfind('\n').filter(|&pos| pos >= end / 2) {
+                end = newline + 1;
+            }
+        }
+        let (chunk, rest) = text.split_at(end);
+        text = rest;
+        Some(chunk)
+    })
 }
 
 #[derive(Debug)]
@@ -64,14 +102,16 @@ impl StageExecutor for IngestExecutor {
             .ok_or_else(|| AutoForgeError::Ingest("missing PDF input".into()))?;
 
         let bytes = ctx.artifacts.get(&pdf_ref.key).await?;
-        let result = ingest_pdf(&bytes)?;
+        let result = tokio::task::spawn_blocking(move || ingest_pdf(&bytes))
+            .await
+            .map_err(|e| AutoForgeError::Ingest(e.to_string()))??;
         let base = format!("projects/{}/ingest", ctx.command.project_id.0);
 
         let text_uri = ctx
             .artifacts
             .put(
                 &format!("{base}/raw_text.md"),
-                Bytes::from(result.raw_text.clone()),
+                Bytes::from(result.raw_text),
                 "text/markdown",
             )
             .await?;
@@ -82,25 +122,25 @@ impl StageExecutor for IngestExecutor {
             "has_devops_plan": false,
         });
 
-        let mut artifacts = vec![text_uri.clone()];
+        let mut artifacts = vec![text_uri];
 
         // DevOps 계획서 ingest (선택)
         let devops_ref = ctx.input.iter().find(|a| a.name.starts_with("devops_plan"));
 
         if let Some(devops_ref) = devops_ref {
             let devops_bytes = ctx.artifacts.get(&devops_ref.key).await?;
-            let devops_input = crate::domain::DevopsPlanInput {
-                filename: Some(devops_ref.name.clone()),
-                content_type: Some(devops_ref.content_type.clone()),
-                bytes: Some(devops_bytes.to_vec()),
-                text: None,
-            };
-            if let Ok(devops) = ingest_devops_plan(&devops_input) {
+            let filename = devops_ref.name.clone();
+            let devops = tokio::task::spawn_blocking(move || {
+                ingest_devops_file(&devops_bytes, Some(&filename))
+            })
+            .await
+            .map_err(|e| AutoForgeError::Ingest(e.to_string()))?;
+            if let Ok(devops) = devops {
                 let devops_uri = ctx
                     .artifacts
                     .put(
                         &format!("{base}/devops_raw_text.md"),
-                        Bytes::from(devops.raw_text.clone()),
+                        Bytes::from(devops.raw_text),
                         "text/markdown",
                     )
                     .await?;
@@ -139,29 +179,45 @@ impl StageExecutor for SummarizeExecutor {
     }
 
     async fn execute(&self, ctx: &StageContext) -> Result<StageOutput> {
-        let prompt = build_summarize_prompt(ctx);
+        let instructions = build_summarize_prompt(ctx);
+        let mut plan = String::new();
+        for name in ["raw_text.md", "devops_raw_text.md"] {
+            if ctx.input_named(name).is_some() {
+                let bytes = ctx.read_input(name).await?;
+                plan.push_str(&format!("\n{name} 본문\n"));
+                plan.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
         let profile = ctx.model_config.profile_for(StageId::Summarize);
 
-        let resp = ctx
-            .cursor
-            .create_agent(&prompt, &profile, CreateAgentOpts::default())
-            .await?;
-
-        let run = ctx
-            .cursor
-            .wait_for_run(
-                &resp.agent.id,
-                &resp.run.id,
-                std::time::Duration::from_secs(5),
-            )
-            .await?;
-
-        let text = run
-            .result_text()
-            .ok_or_else(|| AutoForgeError::StageFailed {
-                stage: StageId::Summarize,
-                message: "empty agent response".into(),
-            })?;
+        if plan.is_empty() {
+            return Err(AutoForgeError::Ingest("missing extracted plan text".into()));
+        }
+        let mut text = String::new();
+        let mut run_id = String::new();
+        for chunk in plan_chunks(&plan) {
+            let prompt = format!("{instructions}\n기존 요약의 요구사항·부하 수치·제약을 유지하고 이번 본문을 통합한 전체 요약을 반환하세요.\n기존 요약\n{text}\n추가 본문\n{chunk}");
+            let resp = ctx
+                .omniroute
+                .create_agent(&prompt, &profile, CreateAgentOpts::default())
+                .await?;
+            let run = ctx
+                .omniroute
+                .wait_for_run(
+                    &resp.agent.id,
+                    &resp.run.id,
+                    std::time::Duration::from_secs(5),
+                )
+                .await?;
+            text = run
+                .result_text()
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| AutoForgeError::StageFailed {
+                    stage: StageId::Summarize,
+                    message: "empty agent response".into(),
+                })?;
+            run_id = resp.run.id;
+        }
 
         let resolved =
             resolve_effective_language(ctx.language_mode, ctx.programming_language, &text);
@@ -179,7 +235,7 @@ impl StageExecutor for SummarizeExecutor {
         Ok(StageOutput {
             artifacts: vec![artifact],
             metadata: serde_json::json!({
-                "cursor_agent_id": resp.agent.id,
+                "omniroute_run_id": run_id,
                 "programming_language": resolved.as_str(),
             }),
         })
@@ -195,20 +251,25 @@ impl StageExecutor for ArchitectExecutor {
     }
 
     async fn execute(&self, ctx: &StageContext) -> Result<StageOutput> {
+        let bytes = ctx.read_input("summary.json").await?;
+        let summary = String::from_utf8_lossy(&bytes);
         if ctx.architecture_finalize {
-            return run_architect_finalize(ctx).await;
+            return run_architect_finalize(ctx, &summary).await;
         }
 
-        let prompt = build_architect_draft_prompt(ctx);
+        let prompt = format!(
+            "{}\nsummary.json\n{summary}",
+            build_architect_draft_prompt(ctx)
+        );
         let profile = ctx.model_config.profile_for(StageId::Architect);
 
         let resp = ctx
-            .cursor
+            .omniroute
             .create_agent(&prompt, &profile, CreateAgentOpts::default())
             .await?;
 
         let run = ctx
-            .cursor
+            .omniroute
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -217,10 +278,10 @@ impl StageExecutor for ArchitectExecutor {
             .await?;
 
         let text = run.result_text().unwrap_or_default();
-        let questions = parse_clarification_questions(&text).unwrap_or_default();
+        let questions = parse_clarification_questions(&text)?;
 
         if questions.is_empty() {
-            return run_architect_finalize_with_answers(ctx, &[]).await;
+            return run_architect_finalize(ctx, &summary).await;
         }
 
         let base = format!("projects/{}/architect", ctx.command.project_id.0);
@@ -252,7 +313,7 @@ impl StageExecutor for ArchitectExecutor {
             artifacts: vec![draft],
             metadata: serde_json::json!({
                 "phase": "draft",
-                "cursor_agent_id": resp.agent.id,
+                "omniroute_run_id": resp.run.id,
                 "questions": question_views,
                 "question_count": questions.len(),
             }),
@@ -412,7 +473,10 @@ impl StageExecutor for ImplementExecutor {
             .as_deref()
             .ok_or_else(|| AutoForgeError::BadRequest("repo_url required".into()))?;
 
-        let prompt = build_implement_prompt(ctx);
+        let mut prompt = build_implement_prompt(ctx);
+        if ctx.input_named("backend.hcl").is_some() {
+            prompt.push_str("\nbackend.hcl에 따라 컴포넌트와 채택한 최적화를 구현하세요. 기존 인덱스를 확인하고 필요한 마이그레이션과 대표 조회의 실행 계획을 검증하세요.");
+        }
         let profile = ctx.model_config.profile_for(StageId::Implement);
 
         let opts = CreateAgentOpts {
@@ -420,11 +484,13 @@ impl StageExecutor for ImplementExecutor {
             starting_ref: Some("main"),
             auto_create_pr: Some(true),
             agent_id: None,
+            pr_url: None,
+            input_artifacts: &ctx.input,
         };
 
-        let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
+        let resp = ctx.omniroute.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
-            .cursor
+            .omniroute
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -442,7 +508,7 @@ impl StageExecutor for ImplementExecutor {
         Ok(StageOutput {
             artifacts: vec![],
             metadata: serde_json::json!({
-                "cursor_agent_id": resp.agent.id,
+                "omniroute_run_id": resp.run.id,
                 "pr_url": pr_url,
             }),
         })
@@ -465,11 +531,11 @@ impl StageExecutor for VerifyExecutor {
 
         let prompt = build_verify_prompt(ctx);
         let profile = ctx.model_config.profile_for(StageId::Verify);
-        let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
+        let opts = agent_opts(repo_url, ctx.pr_url.as_deref(), &ctx.input);
 
-        let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
+        let resp = ctx.omniroute.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
-            .cursor
+            .omniroute
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -495,7 +561,7 @@ impl StageExecutor for VerifyExecutor {
             metadata: serde_json::json!({
                 "passed": report.passed,
                 "errors": report.errors.len(),
-                "cursor_agent_id": resp.agent.id,
+                "omniroute_run_id": resp.run.id,
             }),
         })
     }
@@ -523,11 +589,11 @@ impl StageExecutor for DebugExecutor {
 
         let prompt = build_debug_prompt(ctx, &verify_meta);
         let profile = ctx.model_config.profile_for(StageId::Debug);
-        let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
+        let opts = agent_opts(repo_url, ctx.pr_url.as_deref(), &ctx.input);
 
-        let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
+        let resp = ctx.omniroute.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
-            .cursor
+            .omniroute
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -557,7 +623,7 @@ impl StageExecutor for DebugExecutor {
             artifacts: vec![artifact],
             metadata: serde_json::json!({
                 "debug_cycle": ctx.command.attempt,
-                "cursor_agent_id": resp.agent.id,
+                "omniroute_run_id": resp.run.id,
             }),
         })
     }
@@ -578,11 +644,11 @@ impl StageExecutor for SecurityPatchExecutor {
 
         let prompt = build_security_prompt(ctx);
         let profile = ctx.model_config.profile_for(StageId::SecurityPatch);
-        let opts = agent_opts(repo_url, ctx.pr_url.as_deref());
+        let opts = agent_opts(repo_url, ctx.pr_url.as_deref(), &ctx.input);
 
-        let resp = ctx.cursor.create_agent(&prompt, &profile, opts).await?;
+        let resp = ctx.omniroute.create_agent(&prompt, &profile, opts).await?;
         let run = ctx
-            .cursor
+            .omniroute
             .wait_for_run(
                 &resp.agent.id,
                 &resp.run.id,
@@ -609,7 +675,7 @@ impl StageExecutor for SecurityPatchExecutor {
                 "passed": report.passed,
                 "vulnerabilities_found": report.vulnerabilities_found,
                 "patches_applied": report.patches_applied.len(),
-                "cursor_agent_id": resp.agent.id,
+                "omniroute_run_id": resp.run.id,
             }),
         })
     }
@@ -649,12 +715,18 @@ impl StageExecutor for DeliverExecutor {
     }
 }
 
-fn agent_opts<'a>(repo_url: &'a str, _pr_url: Option<&'a str>) -> CreateAgentOpts<'a> {
+fn agent_opts<'a>(
+    repo_url: &'a str,
+    pr_url: Option<&'a str>,
+    input_artifacts: &'a [ArtifactRef],
+) -> CreateAgentOpts<'a> {
     CreateAgentOpts {
         repo_url: Some(repo_url),
         starting_ref: Some("main"),
         auto_create_pr: Some(false),
         agent_id: None,
+        pr_url,
+        input_artifacts,
     }
 }
 
@@ -688,7 +760,7 @@ fn build_summarize_prompt(ctx: &StageContext) -> String {
     format!(
         "다음 외주 계획서를 분석하여 strict JSON으로 요약하세요.\n\
          필드: title, goals[], scope, constraints[], tech_hints[], ui_requirements[], \
-         devops_requirements[], infrastructure[], ci_cd[], timeline, budget_hint, \
+         devops_requirements[], infrastructure[], ci_cd[], timeline, budget_hint, workload(사용자 수, 피크 부하, 데이터량, 지연 목표의 수치·단위·출처 또는 미상), \
          programming_language, language_rationale\n\
          programming_language: 프로젝트에 가장 적합한 주 구현 언어 (rust|typescript|python|go|java|kotlin|swift|csharp|ruby|php)\n\
          {lang_note}\
@@ -717,7 +789,7 @@ fn build_architect_draft_prompt(ctx: &StageContext) -> String {
          {devops_note}\
          strict JSON만 출력하세요:\n\
          {{\"questions\":[{{\"id\":\"q1\",\"text\":\"질문\",\"options\":[\"선택지1\",\"선택지2\"],\"required\":true,\"category\":\"database|auth|scale|stack|other\"}}]}}\n\
-         - 모호한 요구사항, 기술 스택 선택, 데이터 모델, 인증 방식, 배포 환경 등을 3~7개 질문으로 정리\n\
+         - 모호한 요구사항, 기술 스택 선택, 데이터 모델, 피크 부하, 지연 목표, 배포 예산 등을 3~7개 질문으로 정리\n\
          - options가 있으면 사용자가 선택할 수 있게 제공\n\
          - 명확한 계획서라면 questions를 빈 배열로 반환 가능\n\
          입력: {:?}",
@@ -725,24 +797,17 @@ fn build_architect_draft_prompt(ctx: &StageContext) -> String {
     )
 }
 
-async fn run_architect_finalize(ctx: &StageContext) -> Result<StageOutput> {
-    run_architect_finalize_with_answers(ctx, &ctx.architecture_answers).await
-}
-
-async fn run_architect_finalize_with_answers(
-    ctx: &StageContext,
-    answers: &[(String, String)],
-) -> Result<StageOutput> {
-    let prompt = build_architect_finalize_prompt(ctx, answers);
+async fn run_architect_finalize(ctx: &StageContext, summary: &str) -> Result<StageOutput> {
+    let prompt = build_architect_finalize_prompt(ctx, &ctx.architecture_answers, summary);
     let profile = ctx.model_config.profile_for(StageId::Architect);
 
     let resp = ctx
-        .cursor
+        .omniroute
         .create_agent(&prompt, &profile, CreateAgentOpts::default())
         .await?;
 
     let run = ctx
-        .cursor
+        .omniroute
         .wait_for_run(
             &resp.agent.id,
             &resp.run.id,
@@ -751,26 +816,40 @@ async fn run_architect_finalize_with_answers(
         .await?;
 
     let text = run.result_text().unwrap_or_default();
+    let (spec_md, hcl) = render_response(&text)?;
     let base = format!("projects/{}/architect", ctx.command.project_id.0);
     let spec = ctx
         .artifacts
         .put(
             &format!("{base}/spec.md"),
-            Bytes::from(text),
+            Bytes::from(spec_md),
             "text/markdown",
+        )
+        .await?;
+    let design = ctx
+        .artifacts
+        .put(
+            &format!("{base}/backend.hcl"),
+            Bytes::from(hcl),
+            "text/plain; charset=utf-8",
         )
         .await?;
 
     Ok(StageOutput {
-        artifacts: vec![spec],
+        artifacts: vec![spec, design],
         metadata: serde_json::json!({
             "phase": "finalize",
-            "cursor_agent_id": resp.agent.id,
+            "backend_design": "backend.hcl",
+            "omniroute_run_id": resp.run.id,
         }),
     })
 }
 
-fn build_architect_finalize_prompt(ctx: &StageContext, answers: &[(String, String)]) -> String {
+fn build_architect_finalize_prompt(
+    ctx: &StageContext,
+    answers: &[(String, String)],
+    summary: &str,
+) -> String {
     let inputs = &ctx.input;
     let has_devops = inputs.iter().any(|a| a.name.starts_with("devops_plan"));
     let devops_note = if has_devops {
@@ -800,9 +879,8 @@ fn build_architect_finalize_prompt(ctx: &StageContext, answers: &[(String, Strin
          구현 태스크 DAG(tasks.json)를 작성하세요.\n\
          {lang_note}\
          {devops_note}\
-         {answers_note}\
-         입력: {:?}",
-        inputs.iter().map(|a| &a.uri).collect::<Vec<_>>()
+         {answers_note}\n{}\n입력 summary.json\n{summary}",
+        design_instructions()
     )
 }
 
@@ -887,4 +965,24 @@ fn build_security_prompt(ctx: &StageContext) -> String {
         SECURITY_CHECKS.join("\n"),
         ctx.pr_url
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_plans_keep_middle_sections_and_multibyte_text() {
+        let text = format!(
+            "{}\n피크 부하 120 RPS\n{}",
+            "가".repeat(33000),
+            "나".repeat(33000)
+        );
+        let chunks: Vec<_> = plan_chunks(&text).collect();
+        assert!(chunks.len() > 2);
+        assert_eq!(chunks.concat(), text);
+        assert!(chunks
+            .iter()
+            .all(|chunk| !chunk.is_empty() && chunk.len() <= 64 * 1024));
+    }
 }

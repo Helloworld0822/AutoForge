@@ -195,13 +195,13 @@ export type EstimateGenerationResult =
   | { readonly status: 'failed'; readonly error: string }
   | { readonly status: 'completed'; readonly draft: EstimateInput };
 
-export interface CursorModel {
+export interface OmniRouteModel {
   id: string;
   name?: string | null;
 }
 
 export interface ModelsListResponse {
-  models: CursorModel[];
+  models: OmniRouteModel[];
   defaults: PipelineModelConfig;
 }
 
@@ -213,33 +213,33 @@ export const STAGE_META: Record<
   summarize: {
     label: 'Summarize',
     description: '계획서 구조화 요약',
-    model: 'Haiku',
+    model: 'claude-sonnet-5',
   },
   architect: {
     label: 'Architect',
     description: '시스템 아키텍처 & 상세 기획',
-    model: 'Sonnet',
+    model: 'claude-opus-5-5',
   },
   design: { label: 'Design', description: 'UI 디자인 (Stitch 또는 Figma)', model: 'Stitch / Figma' },
   implement: {
     label: 'Implement',
     description: '코드 구현 & PR 생성',
-    model: 'Codex 5.3',
+    model: 'cx/gpt-5.5',
   },
   verify: {
     label: 'Verify',
     description: '테스트·린트·빌드 검증',
-    model: 'Codex 5.3',
+    model: 'cx/gpt-5.5',
   },
   debug: {
     label: 'Debug',
     description: '검증 실패 자동 수정',
-    model: 'Codex 5.3',
+    model: 'cx/gpt-5.5',
   },
   security_patch: {
     label: 'Security',
     description: '보안 감사 & 패치',
-    model: 'Fable',
+    model: 'cx/gpt-5.5',
   },
   deliver: { label: 'Deliver', description: 'PR 머지 & 산출물 배포' },
 };

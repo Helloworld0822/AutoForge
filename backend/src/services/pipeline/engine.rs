@@ -51,7 +51,7 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
     let architecture_answers: Vec<(String, String)> = project
         .architecture_clarifications
         .iter()
-        .filter_map(|q| q.answer.as_ref().map(|a| (q.id.clone(), a.clone())))
+        .filter_map(|q| q.answer.as_ref().map(|a| (q.question.clone(), a.clone())))
         .collect();
 
     let mut model_config = project.model_config.clone();
@@ -67,7 +67,7 @@ pub async fn execute_stage(app: &App, project: &Project, stage: StageId) -> Resu
             attempt: 0,
         },
         artifacts: app.artifacts.clone(),
-        cursor: app.cursor.clone(),
+        omniroute: app.omniroute.clone(),
         stitch: app.stitch.clone(),
         figma: app.figma.clone(),
         input: accumulated,

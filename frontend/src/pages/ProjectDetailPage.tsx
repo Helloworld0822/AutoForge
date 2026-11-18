@@ -6,9 +6,10 @@ import { PipelineRestartPanel } from '../components/PipelineRestartPanel';
 import { PipelineStages } from '../components/PipelineStages';
 import { DailyLogPanel } from '../components/DailyLogPanel';
 import { ProjectCodingSkills } from '../components/CodingSkillsPanel';
-import { cancelProject } from '../api/client';
+import { cancelProject, downloadBackendDesign } from '../api/client';
 import {
   ArrowLeft,
+  Download,
   ExternalLink,
   GitMerge,
   GitPullRequest,
@@ -40,6 +41,21 @@ export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { project, loading, error, refresh } = useProject(id);
   const [cancelling, setCancelling] = useState(false);
+
+  const [downloadError, setDownloadError] = useState('');
+  const [downloading, setDownloading] = useState(false);
+  const handleDownload = async () => {
+    if (!id) return;
+    setDownloading(true);
+    setDownloadError('');
+    try {
+      await downloadBackendDesign(id);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : 'HCL 파일을 다운로드하지 못했습니다.');
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const handleCancel = async () => {
     if (!id || !confirm('이 프로젝트를 취소하시겠습니까?')) return;
@@ -78,6 +94,9 @@ export function ProjectDetailPage() {
 
   const name = project.name || `Project ${project.id.slice(0, 8)}`;
   const outputs = project.stage_outputs ?? {};
+  const architecture = outputs.architect;
+  const hasDesign = typeof architecture === 'object' && architecture !== null
+    && 'backend_design' in architecture && architecture.backend_design === 'backend.hcl';
   const failedStage = project.stages.find((s) => s.status === 'failed')?.stage as
     | StageId
     | undefined;
@@ -193,6 +212,14 @@ export function ProjectDetailPage() {
       <section className="mb-5 rounded-lg border border-border bg-card p-5 md:p-6">
         <h3 className="mb-4 text-base font-medium">GitHub & 산출물</h3>
         <div className="grid gap-3">
+          {hasDesign && (
+            <button type="button" onClick={handleDownload} disabled={downloading}
+              className="flex items-center gap-3.5 rounded-lg border border-border bg-bg px-4 py-3.5 text-left hover:border-accent disabled:opacity-50">
+              <Download size={20} aria-hidden="true" />
+              {downloading ? '다운로드 중…' : '백엔드 설계 HCL 다운로드'}
+            </button>
+          )}
+          {downloadError && <p role="alert" className="text-sm text-error">{downloadError}</p>}
           {project.repo_url && (
             <a
               href={project.repo_url}

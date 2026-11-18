@@ -314,11 +314,11 @@ export function NewProjectPage() {
           <h3 className="mb-4 font-headline text-base font-semibold">자동화 파이프라인</h3>
           <ol className="list-decimal space-y-2 pl-5 text-sm text-muted">
             <li>
-              <strong className="text-foreground">Summarize</strong> — Haiku가 PDF + DevOps
+              <strong className="text-foreground">Summarize</strong> — PDF + DevOps
               계획서 통합 요약
             </li>
             <li>
-              <strong className="text-foreground">Architect</strong> — Sonnet이 아키텍처 &
+              <strong className="text-foreground">Architect</strong> — 아키텍처 &
               인프라/CI/CD 설계
             </li>
             <li>
@@ -326,7 +326,7 @@ export function NewProjectPage() {
               디자인 파일
             </li>
             <li>
-              <strong className="text-foreground">Implement</strong> — Codex 5.3이 코드 + DevOps
+              <strong className="text-foreground">Implement</strong> — Codex가 코드 + DevOps
               산출물 구현
             </li>
             <li>

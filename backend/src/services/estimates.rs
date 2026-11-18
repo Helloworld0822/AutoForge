@@ -52,10 +52,18 @@ impl EstimateGeneration {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GenerationJob {
-    pub input: EstimateGeneration,
-    pub agent_id: String,
-    pub run_id: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    // Older job files only contain identifiers from the previous provider.
+    #[serde(default)]
+    pub result: Option<GenerationStatus>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum GenerationStatus {
+    Running,
+    Completed { draft: Box<EstimateInput> },
+    Failed { error: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,9 +80,9 @@ struct GeneratedItem {
 
 pub fn parse_generation(text: &str, input: &EstimateGeneration) -> Result<EstimateInput> {
     let value = crate::services::architecture_qa::extract_json_object(text)
-        .ok_or_else(|| AutoForgeError::CursorApi("AI 가견적 응답에 JSON이 없습니다.".into()))?;
+        .ok_or_else(|| AutoForgeError::OmniRouteApi("AI 가견적 응답에 JSON이 없습니다.".into()))?;
     let generated: GeneratedDraft = serde_json::from_value(value)
-        .map_err(|e| AutoForgeError::CursorApi(format!("AI 가견적 형식 오류: {e}")))?;
+        .map_err(|e| AutoForgeError::OmniRouteApi(format!("AI 가견적 형식 오류: {e}")))?;
     let today = chrono::Utc::now().date_naive();
     let valid = today
         .checked_add_signed(chrono::Duration::days(30))

@@ -9,7 +9,7 @@
 3. UI 디자인 에셋 (Stitch)
 4. 구현 코드 + PR (Codex 5.3)
 
-**핵심 제약**: Cursor는 TypeScript SDK만 공식 제공 → Rust 오케스트레이터는 **Cursor Cloud Agents REST API v1**을 직접 호출한다. Stitch는 **MCP HTTP 엔드포인트**를 호출한다.
+**핵심 제약**: Rust 오케스트레이터는 OmniRoute OpenAI 호환 API를 호출하고, 코드 작업은 컨테이너 안의 Codex CLI에서 실행한다. Stitch는 **MCP HTTP 엔드포인트**를 호출한다.
 
 ---
 
@@ -40,7 +40,7 @@ flowchart TB
     end
 
     subgraph External["외부 AI 서비스"]
-        Cursor[Cursor Cloud Agents API]
+        OmniRoute[OmniRoute API + Codex CLI]
         Stitch[Google Stitch MCP]
         GH[GitHub / GitLab]
     end
@@ -51,7 +51,7 @@ flowchart TB
     RD --> W1 & W2 & W3 & W4 & W5 & W6
     W1 & W2 & W3 & W4 & W5 & W6 --> PG
     W1 & W2 & W3 & W4 & W5 & W6 --> S3
-    W2 & W3 & W5 --> Cursor
+    W2 & W3 & W5 --> OmniRoute
     W4 --> Stitch
     W5 & W6 --> GH
 ```
@@ -116,7 +116,7 @@ autoforge/                  # 실행 프로그램 (cargo run)
 │   ├── app.rs              # 전역 App 상태
 │   ├── config.rs
 │   ├── domain/             # StageId, Project, ModelProfile
-│   ├── clients/            # cursor.rs, stitch.rs
+│   ├── clients/            # omniroute.rs, stitch.rs
 │   ├── services/           # ingest, orchestrator, worker, pipeline
 │   └── web/                # Actix-web routes + handlers
 ├── static/index.html       # 웹 대시보드
@@ -145,7 +145,7 @@ pub enum PipelineState {
 }
 ```
 
-### 4.2 `clients/cursor` — Cursor API 래퍼
+### 4.2 `clients/omniroute` — OmniRoute API와 컨테이너 Codex 실행기
 
 - `POST /v1/agents` — 에이전트 생성 + 초기 run
 - `POST /v1/agents/{id}/runs` — 후속 프롬프트
@@ -221,11 +221,11 @@ Worker 프로세스는 `STAGE_FILTER` env로 특정 스테이지만 처리 가�
 | GET | `/v1/projects/{id}` | 상태 + 산출물 목록 |
 | GET | `/v1/projects/{id}/stream` | SSE 진행률 |
 | POST | `/v1/projects/{id}/cancel` | 취소 |
-| POST | `/v1/webhooks/cursor` | Cursor webhook (v0 legacy, 준비) |
+| POST | `/v1/webhooks/omniroute` | OmniRoute webhook (v0 legacy, 준비) |
 
 ---
 
-## 5. Cursor Agent 프롬프트 전략
+## 5. Codex CLI 프롬프트 전략
 
 ### 5.1 Summarize (Sonnet)
 
@@ -306,7 +306,7 @@ System: tasks.json 순서대로 구현. design/ 폴더의 Stitch HTML을 참고�
 └──────────────────────────────────────────────┘
          │                    │
          ▼                    ▼
-   Cursor Cloud API     Stitch MCP API
+   OmniRoute API + Codex CLI     Stitch MCP API
    (VM per agent)       (Google Cloud)
 ```
 
@@ -319,10 +319,10 @@ System: tasks.json 순서대로 구현. design/ 폴더의 Stitch HTML을 참고�
 ## 8. 보안
 
 - API Key: 환경 변수 / K8s Secret / Vault
-- `envVars` (Cursor): repo별 시크릿 주입, 세션 종료 시 삭제
+- `envVars` (Codex CLI): repo별 시크릿 주입, 세션 종료 시 삭제
 - PDF: 업로드 시 바이러스 스캔 (ClamAV sidecar)
 - 고객 repo: fine-grained GitHub token, scope 최소화
-- Hook: `.cursor/hooks.json`으로 위험 shell 명령 차단
+- Hook: `~/.codex/config.toml`으로 위험 shell 명령 차단
 
 ---
 
@@ -330,7 +330,7 @@ System: tasks.json 순서대로 구현. design/ 폴더의 Stitch HTML을 참고�
 
 - `tracing` + OpenTelemetry → Datadog / Grafana
 - 메트릭: `stage_duration_seconds`, `agent_token_usage`, `pipeline_success_rate`
-- 구조화 로그: `project_id`, `stage`, `cursor_run_id` correlation
+- 구조화 로그: `project_id`, `stage`, `omniroute_run_id` correlation
 
 ---
 
@@ -343,4 +343,4 @@ System: tasks.json 순서대로 구현. design/ 폴더의 Stitch HTML을 참고�
 | Fable 스펙 불완전 | AC 누락 감지 → 보완 프롬프트 |
 | Stitch 타임아웃 | 5분 timeout → 단순 프롬프트 재시도 |
 | Codex 빌드 실패 | verify 단계에서 CI 로그 피드백 루프 |
-| Cursor API rate limit | Redis delayed queue + jitter |
+| OmniRoute API rate limit | Redis delayed queue + jitter |

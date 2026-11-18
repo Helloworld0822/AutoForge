@@ -25,14 +25,12 @@ pub fn ingest_pdf(bytes: &[u8]) -> Result<IngestResult> {
     let doc = lopdf::Document::load_mem(bytes)
         .map_err(|e| AutoForgeError::Ingest(format!("PDF parse failed: {e}")))?;
 
-    let page_count = doc.get_pages().len() as u32;
-    let mut raw_text = doc
-        .extract_text(&[])
-        .map_err(|e| AutoForgeError::Ingest(format!("text extraction failed: {e}")))?;
-
-    if raw_text.trim().is_empty() {
-        raw_text = extract_text_pdftotext(bytes)?;
-    }
+    let pages: Vec<_> = doc.get_pages().into_keys().collect();
+    let page_count = pages.len() as u32;
+    let raw_text = match doc.extract_text(&pages) {
+        Ok(text) if !text.trim().is_empty() => text,
+        _ => extract_text_pdftotext(bytes)?,
+    };
 
     Ok(IngestResult {
         raw_text,

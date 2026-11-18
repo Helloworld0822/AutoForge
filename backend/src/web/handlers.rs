@@ -103,6 +103,32 @@ pub async fn get_project(app: web::Data<Arc<App>>, path: web::Path<Uuid>) -> Res
     Ok(HttpResponse::Ok().json(ProjectDetailView::from(&project)))
 }
 
+pub async fn backend_design(
+    app: web::Data<Arc<App>>,
+    path: web::Path<Uuid>,
+) -> Result<HttpResponse> {
+    let id = path.into_inner();
+    let project = app
+        .store
+        .get(id)
+        .await?
+        .ok_or_else(|| AutoForgeError::NotFound(format!("project {id}")))?;
+    let key = format!("projects/{id}/architect/backend.hcl");
+    if !project.accumulated_artifacts.iter().any(|a| a.key == key) {
+        return Err(AutoForgeError::NotFound(
+            "backend design unavailable".into(),
+        ));
+    }
+    let bytes = app.artifacts.get(&key).await?;
+    Ok(HttpResponse::Ok()
+        .insert_header((
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=backend.hcl",
+        ))
+        .content_type("text/plain; charset=utf-8")
+        .body(bytes))
+}
+
 pub async fn create_project(
     app: web::Data<Arc<App>>,
     mut payload: Multipart,
@@ -332,13 +358,13 @@ pub async fn submit_architecture_answers(
 }
 
 pub async fn list_models(app: web::Data<Arc<App>>) -> Result<HttpResponse> {
-    use crate::clients::cursor::CursorClient;
+    use crate::clients::omniroute::OmniRouteClient;
 
     let models = app
-        .cursor
+        .omniroute
         .list_models()
         .await
-        .unwrap_or_else(|_| CursorClient::fallback_models());
+        .unwrap_or_else(|_| OmniRouteClient::fallback_models());
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "models": models,

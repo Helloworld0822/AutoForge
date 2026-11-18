@@ -66,7 +66,7 @@ function fetchOptions(init?: RequestInit): RequestInit {
   };
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function fetchResponse(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(`${API_BASE}${path}`, fetchOptions(init));
   if (!res.ok) {
     const body = await res.text();
@@ -79,7 +79,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(message || `HTTP ${res.status}`);
   }
-  return res.json() as Promise<T>;
+  return res;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return (await fetchResponse(path, init)).json() as Promise<T>;
+}
+
+export async function downloadBackendDesign(id: string): Promise<void> {
+  const response = await fetchResponse(`/v1/projects/${id}/backend.hcl`);
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'backend.hcl';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export interface CreateProjectOptions {
